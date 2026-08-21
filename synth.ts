@@ -42,10 +42,7 @@ namespace orchestra {
     //% blockId=orch_play_sample
     //% block="play sample %sample with gain %gain"
     //% shim=orchestra::playSample
-    export function playSample(sample: Sample, gain: number): void
-    {
-	    return
-    }
+    export declare function playSample(sample: Sample, gain: number): void;
 
     //% help=orch/note weight=30
     //% group="Orchestra"
