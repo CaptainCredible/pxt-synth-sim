@@ -40,6 +40,7 @@ enum class SynthPreset {
     Sound2,
     //% sound3
     Sound3,
+    Sound4
 };
 
 enum class SynthParameter {
@@ -142,7 +143,7 @@ static void audioInit()
     //uBit.audio.setSpeakerEnabled(false);
     uBit.audio.setVolume(255);
     uBit.audio.enable();
-    uBit.audio.mixer.addChannel(atest);
+    uBit.audio.mixer.addChannel(atest, 44100);
     atest.go();
     audioInited = true;
     for (int i = 0; i < 3; ++i) {
