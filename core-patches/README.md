@@ -9,6 +9,9 @@ this extension. Those changes live in two repos we don't own, so they are kept h
 | `pxt-core-pianoroll-sim.patch` | MakeCode core, https://github.com/microsoft/pxt | `a0ef861` |
 | `pxt-microbit-notam-sim.patch` | NOTAM micro:bit target, https://git.notam.no/thomj/pxt-microbit (only `sim/state/orchestra.ts`) | `58f9e26b` |
 
+The core changes are also committed as a normal branch: https://github.com/CaptainCredible/pxt/tree/synth-sim-blocks
+(fork of microsoft/pxt). That branch is the main copy; the patch file is a convenience for upstreaming.
+
 Other files:
 
 - `CORE-CHANGES.md`: what each change does, why, and notes for proposing it upstream (Microsoft / Micro:bit
