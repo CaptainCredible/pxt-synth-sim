@@ -235,7 +235,7 @@ namespace synthBlocks {
     //% myLevel.min=0 myLevel.max=100
     //% myLevel.defl=80
     //% LFOFreq.defl = 1 
-    //% weight=0
+    //% weight=0 deprecated=1
     export function setupSound(preset: SynthPreset, osc1Shape: oscShapes, osc2Shape: oscShapes, myOsc1Gain: number, myOsc2Gain: number, osc2Transpose: number, myPW1: number, myPWM1: number, myPW2: number, myPWM2: number, filtCut: number, filtRes: number, filtEnv: number, filtKey: number, filtLFO: number,gateEnv: gateOrEnv, myEnvA: number, myEnvD: number, myEnvS: number, myEnvR: number, myLfoFreq: number, myVibFreq: number, myVibAmount: number, myLevel: number, myLFOShape: oscShapes, myFMAmount: number, myNoise: number): void {
         orchestra.note(0,1,0);
         orchestra.setParameter(preset, SynthParameter.Osc1Shape, osc1Shape)

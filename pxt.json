@@ -23,6 +23,9 @@
         "samples/OHH_sample.h",
         "samples/Cowbell_sample.h",
         "helpers.ts",
+        "sequencer.ts",
+        "soundpresets.ts",
+        "soundsetup.ts",
         "main.ts"
     ],
     "targetVersions": {

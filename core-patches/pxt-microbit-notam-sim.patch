@@ -1,0 +1,93 @@
+diff --git a/sim/state/orchestra.ts b/sim/state/orchestra.ts
+index 8f9c7791..eec8921d 100644
+--- a/sim/state/orchestra.ts
++++ b/sim/state/orchestra.ts
+@@ -293,3 +293,88 @@ namespace pxsim.orchestra {
+         post({ type: "playSample", sample, gain });
+     }
+ }
++
++// Note previews from the editor's piano roll (pxt core webapp/src/components/pianoRoll/simOutput.ts,
++// enabled by `fieldOptions.simInstruments` on pxt-synth-sim's "sequence" block). The editor posts
++// { type: "custom", content: { type: "pianoroll-note", instrument, note, velocity, duration } }
++// to this iframe; play it on the synth with the preset's current settings. Custom messages are
++// delivered even when no program is running, so the presets last set by the program are used.
++namespace pxsim.orchestra {
++    const previousCustomHandler = pxsim.handleCustomMessage;
++    pxsim.handleCustomMessage = (msg: pxsim.SimulatorCustomMessage) => {
++        const content = msg && msg.content;
++        if (content && content.type === "pianoroll-note") {
++            const preset = Math.max(0, Math.min(2, content.instrument | 0));
++            note(content.note, content.duration, content.velocity, preset);
++            return;
++        }
++        if (content && content.type === "synth-preview") {
++            previewSound(content.values || {}, content.note | 0);
++            return;
++        }
++        if (previousCustomHandler) previousCustomHandler(msg);
++    };
++}
++
++// Preview buttons on pxt-synth-sim's "set up sound" block (pxt core field_synth_graph.ts, graph="preview").
++// The editor sends the block's current values by parameter name; apply them to the preset like
++// synthBlocks.setUpSound() does, then play one note. Scaling and defaults here MUST match
++// pxt-synth-sim/soundsetup.ts. Values for sections that were never expanded may be missing, so the
++// defaults are used for those.
++namespace pxsim.orchestra {
++    export function previewSound(values: { [name: string]: number | string }, midiNote: number) {
++        const num = (name: string, defl: number) => {
++            const v = values[name];
++            return typeof v === "number" && !isNaN(v) ? v : defl;
++        };
++        const member = (name: string) => String(values[name] || "").split(".").pop().toLowerCase();
++        const pct = (v: number) => Math.max(0, Math.min(100, v)) / 100;
++        const shape = (name: string, defl: number) => {
++            const m = member(name);
++            return m.indexOf("pulse") >= 0 ? 1 : m.indexOf("tri") >= 0 ? 2 : m.indexOf("saw") >= 0 ? 0 : defl;
++        };
++
++        const presetNumber = parseInt(member("preset").replace(/[^0-9]/g, ""));
++        const preset = isNaN(presetNumber) ? 0 : Math.max(0, Math.min(2, presetNumber - 1));
++        const gate = member("gateEnv");
++        const filter = member("filterType");
++
++        // parameter numbers are the SynthParameter enum (pxt-synth-sim enums.d.ts)
++        const set = (param: number, value: number) => setParameter(preset, param as any, value);
++        set(0, shape("osc1Shape", 0));                         // Osc1Shape
++        set(7, pct(num("osc1Level", 80)));                     // Osc1Gain
++        set(26, num("tune", 0));                               // Tune
++        set(1, shape("osc2Shape", 1));                         // Osc2Shape
++        set(8, pct(num("osc2Level", 0)));                      // Osc2Gain
++        set(2, num("osc2Transpose", 0));                       // Osc2Transpose
++        set(27, pct(num("noise", 0)));                         // Noise
++        set(21, pct(num("volume", 80)));                       // Gain
++
++        set(20, gate === "gate" ? 1 : 0);                      // AmpGate
++        set(16, Math.max(0, num("attack", 5)) / 1000);         // EnvAttackTime
++        set(17, Math.max(0, num("decay", 200)) / 1000);        // EnvDecayTime
++        set(18, pct(num("sustain", 50)));                      // EnvSustainLevel
++        set(19, Math.max(0, num("release", 600)) / 1000);      // EnvRelease
++
++        set(15, filter.indexOf("high") >= 0 ? 1 : filter.indexOf("band") >= 0 ? 2 : 0); // FilterType
++        set(10, pct(num("cutoff", 80)));                       // Cutoff
++        set(11, pct(num("resonance", 0)));                     // Resonance
++        set(13, pct(num("filterEnv", 20)));                    // FilterEnvAmount
++        set(12, pct(num("filterKey", 0)));                     // FilterKeyFollow
++        set(14, pct(num("filterLfo", 0)));                     // FilterLfoAmount
++
++        set(23, shape("lfoShape", 2));                         // LFOShape
++        set(22, Math.max(0, num("lfoFreq", 2)));               // LFOFreq
++        set(24, Math.max(0, num("vibFreq", 5)));               // VibratoFreq
++        set(25, Math.max(0, num("vibDepth", 0)) / 100);        // VibratoAmount
++
++        set(9, pct(num("fm", 0)));                             // OscFm
++        set(3, pct(num("pw1", 50)) * 2 - 1);                   // Osc1Pw
++        set(5, pct(num("pwm1", 0)));                           // Osc1Pwm
++        set(4, pct(num("pw2", 50)) * 2 - 1);                   // Osc2Pw
++        set(6, pct(num("pwm2", 0)));                           // Osc2Pwm
++
++        resume();
++        note(midiNote || 60, 500, 127, preset);
++    }
++}

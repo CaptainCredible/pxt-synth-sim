@@ -41,6 +41,7 @@ namespace orchestra {
     //% group="Orchestra"
     //% blockId=orch_play_sample
     //% block="play sample %sample with gain %gain"
+    //% parts="headphone"
     //% shim=orchestra::playSample
     export declare function playSample(sample: Sample, gain: number): void;
 
@@ -52,6 +53,7 @@ namespace orchestra {
     //% duration.min=1 duration.max=10000
     //% velocity.min=0 velocity.max=127
     //% note.defl=69 duration.defl=1000 velocity.defl=127 preset.defl=1 s
+    //% parts="headphone"
     //% shim=orchestra::note
     export declare function note(note?: number, duration?: number, velocity?: number, preset?: SynthPreset): void;
 
@@ -61,6 +63,7 @@ namespace orchestra {
     //% block="stop note %note"
     //% note.min=0 note.max=127
     //% note.defl=69
+    //% parts="headphone"
     //% shim=orchestra::noteOff
     export declare function noteOff(note?: number): void;
 }

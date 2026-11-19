@@ -1,0 +1,1730 @@
+diff --git a/localtypings/pxtarget.d.ts b/localtypings/pxtarget.d.ts
+index 911c2d6..2de3606 100644
+--- a/localtypings/pxtarget.d.ts
++++ b/localtypings/pxtarget.d.ts
+@@ -1004,6 +1004,8 @@ declare namespace ts.pxtc {
+         expandableArgumentBreaks?: string; // a comma separated list of how many arguments to reveal/hide each time + or - is pressed on a block. only applies when expandableArgumentsMode=enabled
+         expandArgumentsInToolbox?: boolean; // if true, the block will be fully expanded in the toolbox flyout
+         compileHiddenArguments?: boolean; // if true, compiles the values in expandable arguments even when collapsed
++        inlineRowBreaks?: boolean; // with inlineInputMode=inline, every "|" in the block string starts a new row, and the +/- buttons get their own row
++        expandableArgumentSeparators?: boolean; // with inlineRowBreaks, draw a line before each section revealed by the + button (see expandableArgumentBreaks)
+         draggableParameters?: string; // can be reporter or variable; defaults to variable
+ 
+ 
+diff --git a/pxtblocks/composableMutations.ts b/pxtblocks/composableMutations.ts
+index d30eaa8..e95ab0c 100644
+--- a/pxtblocks/composableMutations.ts
++++ b/pxtblocks/composableMutations.ts
+@@ -135,6 +135,8 @@ export function initExpandableBlock(info: pxtc.BlocksInfo, b: Blockly.Block, def
+     const variableInlineInputs = info.blocksById[b.type].attributes.inlineInputMode === "variable";
+     const inlineInputModeLimit = info.blocksById[b.type].attributes.inlineInputModeLimit || 4;
+     const compileHiddenArguments = info.blocksById[b.type].attributes.compileHiddenArguments;
++    const buttonsOnOwnRow = !!info.blocksById[b.type].attributes.inlineRowBreaks;
++    const buttonRowEndName = "0_buttons_row_end";
+     const breakString = info.blocksById[b.type].attributes.expandableArgumentBreaks;
+ 
+     let breaks: number[];
+@@ -290,6 +292,10 @@ export function initExpandableBlock(info: pxtc.BlocksInfo, b: Blockly.Block, def
+         if (b.inputList.some(i => i.name === buttonAddName)) b.removeInput(buttonAddName, true);
+         if (b.inputList.some(i => i.name === buttonRemName)) b.removeInput(buttonRemName, true);
+         if (b.inputList.some(i => i.name === buttonAddRemName)) b.removeInput(buttonAddRemName, true);
++        if (b.inputList.some(i => i.name === buttonRowEndName)) b.removeInput(buttonRowEndName, true);
++
++        // inlineRowBreaks: end the last parameter row so the buttons sit on a row of their own
++        if (buttonsOnOwnRow && (showPlus || showMinus)) b.appendEndRowInput(buttonRowEndName);
+ 
+         if (showPlus && showMinus) {
+             buttonToFocus = addPlusAndMinusButtons();
+diff --git a/pxtblocks/fields/fieldEditorRegistry.ts b/pxtblocks/fields/fieldEditorRegistry.ts
+index 5a2b76f..1a1ace2 100644
+--- a/pxtblocks/fields/fieldEditorRegistry.ts
++++ b/pxtblocks/fields/fieldEditorRegistry.ts
+@@ -32,6 +32,8 @@ import { FieldAutoComplete } from "./field_autocomplete";
+ import { FieldColorWheel } from "./field_colorwheel";
+ import { FieldScopedValueSelector } from "./field_scopedvalueselector";
+ import { FieldPianoRoll } from "./field_piano_roll";
++import { FieldSynthGraph, FieldSynthPreview } from "./field_synth_graph";
++import { FieldPresetValues } from "./field_preset_values";
+ 
+ interface FieldEditorOptions {
+     field: FieldCustomConstructor;
+@@ -69,6 +71,9 @@ export function initFieldEditors() {
+     registerFieldEditor('soundeffect', FieldSoundEffect);
+     registerFieldEditor('autocomplete', FieldAutoComplete);
+     registerFieldEditor('scopedvalueselector', FieldScopedValueSelector);
++    registerFieldEditor('synthgraph', FieldSynthGraph);
++    registerFieldEditor('synthpreview', FieldSynthPreview);
++    registerFieldEditor('presetvalues', FieldPresetValues);
+     if (pxt.appTarget.appTheme?.songEditor) {
+         registerFieldEditor('musiceditor', FieldMusicEditor);
+         registerFieldEditor('pianoroll', FieldPianoRoll);
+diff --git a/pxtblocks/fields/field_musiceditor.ts b/pxtblocks/fields/field_musiceditor.ts
+index 1410b5a..fa630ed 100644
+--- a/pxtblocks/fields/field_musiceditor.ts
++++ b/pxtblocks/fields/field_musiceditor.ts
+@@ -114,7 +114,7 @@ export class FieldMusicEditor extends FieldAssetEditor<FieldMusicEditorOptions,
+         this.fieldGroup_.appendChild(bg.el);
+ 
+         if (this.asset) {
+-            const dataURI = songToDataURI((this.asset as pxt.Song).song, this.previewWidth(), PREVIEW_HEIGHT, this.lightMode);
++            const dataURI = songToDataURI((this.asset as pxt.Song).song, this.previewWidth(), PREVIEW_HEIGHT, this.lightMode, undefined, this.previewTrackColors());
+ 
+             if (dataURI) {
+                 const img = new svg.Image()
+@@ -138,4 +138,9 @@ export class FieldMusicEditor extends FieldAssetEditor<FieldMusicEditorOptions,
+     protected shouldInflateAsset(): boolean {
+         return true;
+     }
++
++    /** CSS colours for the preview, by track position; undefined uses the target palette */
++    protected previewTrackColors(): string[] | undefined {
++        return undefined;
++    }
+ }
+\ No newline at end of file
+diff --git a/pxtblocks/fields/field_piano_roll.ts b/pxtblocks/fields/field_piano_roll.ts
+index ae1ed67..dd4ee49 100644
+--- a/pxtblocks/fields/field_piano_roll.ts
++++ b/pxtblocks/fields/field_piano_roll.ts
+@@ -12,11 +12,17 @@ interface FieldPianoRollOptions extends FieldMusicEditorOptions {
+     maxOctave?: number;
+     showTimeSignature?: boolean;
+     showSnapControls?: boolean;
++    simInstruments?: string[];
++    previewColors?: string[];
++    showMidiNumbers?: boolean;
++    showSequenceTools?: boolean;
++    singleTrack?: boolean;
+ }
+ 
+ export class FieldPianoRoll extends FieldMusicEditor {
+     protected showInWidgetDiv: boolean;
+     protected encodeAsMelody: boolean;
++    protected previewColors: string[];
+ 
+     override showEditor_() {
+         if (this.asset && this.encodeAsMelody) {
+@@ -170,6 +176,36 @@ export class FieldPianoRoll extends FieldMusicEditor {
+             result.showSnapControls = isTrue(opts.showSnapControls);
+         }
+ 
++        if (opts.showSequenceTools) {
++            result.showSequenceTools = isTrue(opts.showSequenceTools);
++        }
++
++        if (opts.singleTrack) {
++            result.singleTrack = isTrue(opts.singleTrack);
++        }
++
++        if (opts.showMidiNumbers) {
++            result.showMidiNumbers = isTrue(opts.showMidiNumbers);
++        }
++
++        if (opts.previewColors) {
++            // comma separated CSS colours for the block thumbnail, by track
++            const colors = (opts.previewColors as string).split(",").map(c => c.trim()).filter(c => !!c);
++            if (colors.length) {
++                result.previewColors = colors;
++                this.previewColors = colors;
++            }
++        }
++
++        if (opts.simInstruments) {
++            // comma separated names of instruments that only exist in the simulator
++            // (see webapp/src/components/pianoRoll/simOutput.ts)
++            const names = (opts.simInstruments as string).split(",").map(n => n.trim()).filter(n => !!n);
++            if (names.length) {
++                result.simInstruments = names;
++            }
++        }
++
+         return result;
+     }
+ 
+@@ -212,6 +248,18 @@ export class FieldPianoRoll extends FieldMusicEditor {
+     protected override shouldInflateAsset(): boolean {
+         return false;
+     }
++
++    // fieldOptions.previewColors, else the piano roll's own note colour (--note-event-color in piano-roll.less)
++    // for the first track and distinct colours for the rest
++    protected override previewTrackColors() {
++        return this.previewColors || ["#03adfc", "#ff8b27", "#e24fb1", "#2bb673"];
++    }
++
++    // a 16-step bar needs more room than the song editor's 32px per measure
++    protected override previewWidth() {
++        const measures = this.asset ? (this.asset as pxt.Song).song.measures : 1;
++        return Math.min(measures * 64, 256);
++    }
+ }
+ 
+ function melodyInstrument(): pxt.assets.music.Instrument {
+diff --git a/pxtblocks/fields/field_preset_values.ts b/pxtblocks/fields/field_preset_values.ts
+new file mode 100644
+index 0000000..c4578e1
+--- /dev/null
++++ b/pxtblocks/fields/field_preset_values.ts
+@@ -0,0 +1,140 @@
++import * as Blockly from "blockly";
++import { FieldDropdown } from "./field_dropdown";
++import { FieldCustom, FieldCustomDropdownOptions } from "./field_utils";
++
++/**
++ * An enum dropdown whose members carry values for the other inputs of the same block.
++ * Choosing a member in the menu copies those values into the block, so presets cost
++ * nothing at runtime: the program only contains whatever is on the block.
++ *
++ *     enum SynthSoundPreset {
++ *         //% block="custom"
++ *         Custom = 0,
++ *         //% block="FM pluck"
++ *         //% blockValues="osc1Shape=oscShapes.triangle osc1Level=100 attack=0 ..."
++ *         FMPluck = 1,
++ *     }
++ *
++ *     //% soundPreset.fieldEditor="presetvalues"
++ *     export function setUpSound(preset: SynthPreset, soundPreset: SynthSoundPreset, ...)
++ *
++ * blockValues is a space separated list of name=value. A name matching a field on the block
++ * (e.g. an enum dropdown) gets the value as the field value; otherwise the number goes into the
++ * shadow number/slider block of the input with that name. Values are only applied when the user
++ * picks a member, never when a project loads.
++ *
++ * When the user then changes one of the values the preset filled in, the dropdown switches
++ * back to the first member without blockValues (e.g. "custom"), so it never claims a preset
++ * that isn't on the block any more.
++ */
++export class FieldPresetValues extends FieldDropdown implements FieldCustom {
++    public isFieldCustom_ = true;
++    protected blocksInfo: pxtc.BlocksInfo;
++    protected customValue: string;
++    /** event group of our own last fill-in, so its changes don't count as user edits */
++    protected applyGroup: string;
++    protected changeListener: (e: Blockly.Events.Abstract) => void;
++
++    constructor(text: string, params: FieldCustomDropdownOptions, validator?: Blockly.FieldValidator) {
++        const options = ((params.data || []) as any[]).map(o => [o[0], o[1]] as [string, string]);
++        super(options.length ? options : [["", ""]], validator);
++        this.blocksInfo = params.blocksInfo;
++        this.customValue = options.find(o => !this.presetValues(o[1]))?.[1];
++        if (options.some(o => o[1] === text)) this.setValue(text);
++    }
++
++    initView() {
++        super.initView();
++        const ws = this.sourceBlock_?.workspace;
++        if (ws && !this.changeListener) {
++            this.changeListener = e => this.onWorkspaceChange(e);
++            ws.addChangeListener(this.changeListener);
++        }
++    }
++
++    dispose() {
++        const ws = this.sourceBlock_?.workspace;
++        if (ws && this.changeListener) ws.removeChangeListener(this.changeListener);
++        this.changeListener = undefined;
++        super.dispose();
++    }
++
++    protected presetValues(qName: string): string | undefined {
++        // custom attributes are kept as strings on the symbol's attributes
++        return (this.blocksInfo?.apis?.byQName?.[qName]?.attributes as any)?.blockValues as string;
++    }
++
++    /** the names (fields or inputs of this block) that the current preset sets */
++    protected presetNames(): string[] {
++        const values = this.presetValues(this.getValue());
++        if (!values) return [];
++        return values.trim().split(/\s+/).map(pair => pair.slice(0, pair.indexOf("="))).filter(n => !!n);
++    }
++
++    protected onWorkspaceChange(e: Blockly.Events.Abstract) {
++        const block = this.sourceBlock_;
++        if (!block || e.type !== Blockly.Events.BLOCK_CHANGE) return;
++        if (this.customValue === undefined || this.getValue() === this.customValue) return;
++        if (e.group && e.group === this.applyGroup) return;
++
++        const change = e as Blockly.Events.BlockChange;
++        if (change.element !== "field" || change.oldValue === change.newValue) return;
++
++        const names = this.presetNames();
++        let changedName: string | undefined;
++        if (change.blockId === block.id) {
++            changedName = change.name;
++        }
++        else {
++            // a number/slider shadow plugged into one of our inputs
++            const changed = block.workspace.getBlockById(change.blockId);
++            const input = changed && changed.getParent() === block ? block.getInputWithBlock(changed) : undefined;
++            changedName = input?.name;
++        }
++        if (changedName && changedName !== this.name && names.indexOf(changedName) >= 0) {
++            this.setValue(this.customValue);
++        }
++    }
++
++    protected onItemSelected_(menu: Blockly.Menu, menuItem: Blockly.MenuItem) {
++        super.onItemSelected_(menu, menuItem);
++        this.applyPreset(this.getValue());
++    }
++
++    protected applyPreset(qName: string) {
++        const block = this.sourceBlock_;
++        const values = this.presetValues(qName);
++        if (!block || !values) return;
++
++        // one undo step for the whole preset
++        const group = Blockly.Events.getGroup();
++        if (!group) Blockly.Events.setGroup(true);
++        this.applyGroup = Blockly.Events.getGroup();
++        try {
++            for (const pair of values.trim().split(/\s+/)) {
++                const eq = pair.indexOf("=");
++                if (eq <= 0) continue;
++                const name = pair.slice(0, eq);
++                const value = pair.slice(eq + 1);
++
++                const field = block.getField(name);
++                if (field && field !== this) {
++                    field.setValue(value);
++                    continue;
++                }
++
++                const target = block.getInputTargetBlock(name);
++                if (!target) continue;
++                for (const fieldName of ["SLIDER", "NUM"]) {
++                    if (target.getField(fieldName)) {
++                        target.setFieldValue(value, fieldName);
++                        break;
++                    }
++                }
++            }
++        }
++        finally {
++            if (!group) Blockly.Events.setGroup(false);
++        }
++    }
++}
+diff --git a/pxtblocks/fields/field_row_separator.ts b/pxtblocks/fields/field_row_separator.ts
+new file mode 100644
+index 0000000..9d289bf
+--- /dev/null
++++ b/pxtblocks/fields/field_row_separator.ts
+@@ -0,0 +1,84 @@
++import * as Blockly from "blockly";
++
++/**
++ * A horizontal line across the whole block, used between the sections of an
++ * expandable block (see the expandableArgumentSeparators block attribute).
++ *
++ * The field itself is tiny so it never affects the block's width; the line is drawn
++ * outside its bounds, from the block's left edge to its right edge, and re-measured
++ * after the block is rendered (and whenever the workspace changes).
++ */
++export class FieldRowSeparator extends Blockly.Field<string> {
++    public SERIALIZABLE = false;
++    public EDITABLE = false;
++
++    protected line: SVGLineElement;
++    protected changeListener: (e: Blockly.Events.Abstract) => void;
++    protected pending = false;
++
++    constructor() {
++        super("");
++        this.size_ = new Blockly.utils.Size(1, 10);
++    }
++
++    initView() {
++        this.line = Blockly.utils.dom.createSvgElement("line", {
++            "stroke-width": 5,
++            "stroke-linecap": "round",
++            "pointer-events": "none"
++        }, this.fieldGroup_) as SVGLineElement;
++
++        const ws = this.sourceBlock_?.workspace;
++        if (ws) {
++            this.changeListener = () => this.scheduleUpdate();
++            ws.addChangeListener(this.changeListener);
++        }
++    }
++
++    dispose() {
++        const ws = this.sourceBlock_?.workspace;
++        if (ws && this.changeListener) ws.removeChangeListener(this.changeListener);
++        this.changeListener = undefined;
++        super.dispose();
++    }
++
++    protected render_() {
++        this.size_.width = 1;
++        this.size_.height = 10;
++        this.scheduleUpdate();
++    }
++
++    protected scheduleUpdate() {
++        if (this.pending) return;
++        this.pending = true;
++        requestAnimationFrame(() => {
++            this.pending = false;
++            this.updateLine();
++        });
++    }
++
++    protected updateLine() {
++        const block = this.sourceBlock_ as Blockly.BlockSvg;
++        if (!this.line || !block || !this.fieldGroup_) return;
++
++        // the field group is translated relative to the block's own group
++        const transform = this.fieldGroup_.transform?.baseVal?.consolidate?.();
++        const offsetX = transform ? transform.matrix.e : 0;
++        const width = block.width || 0;
++        const inset = 26;
++
++        this.line.setAttribute("x1", String(inset - offsetX));
++        this.line.setAttribute("x2", String(Math.max(inset, width - inset) - offsetX));
++        this.line.setAttribute("y1", "5");
++        this.line.setAttribute("y2", "5");
++        // a somewhat darker shade of the block colour (darker green on a green block)
++        const colour = block.getColour?.() || "#000000";
++        const dark = Blockly.utils.colour.blend("#000000", colour, 0.15) || colour;
++        this.line.setAttribute("stroke", dark);
++        this.line.setAttribute("stroke-opacity", "0.9");
++    }
++
++    getText_(): string {
++        return "";
++    }
++}
+diff --git a/pxtblocks/fields/field_synth_graph.ts b/pxtblocks/fields/field_synth_graph.ts
+new file mode 100644
+index 0000000..96a4d96
+--- /dev/null
++++ b/pxtblocks/fields/field_synth_graph.ts
+@@ -0,0 +1,454 @@
++/// <reference path="../../built/pxtlib.d.ts" />
++
++import * as Blockly from "blockly";
++import { FieldCustom, FieldCustomDropdownOptions, postSimulatorMessage } from "./field_utils";
++import { FieldDropdown } from "./field_dropdown";
++
++/**
++ * A field for an enum parameter that draws a small live graph instead of a dropdown.
++ * Clicking it steps to the next enum value. The graph also reads the current values
++ * of sibling number inputs on the same block, so it updates as you change them.
++ *
++ *     //% osc1Shape.fieldEditor="synthgraph"
++ *     //% osc1Shape.fieldOptions.graph="wave"        wave | envelope | filter | lfo
++ *     //% osc1Shape.fieldOptions.inputs="pw1"         sibling input names, in the order the graph expects
++ *     //% osc1Shape.fieldOptions.defaults="50"        used when an input is hidden or not a number
++ *
++ * graph="wave"     inputs: pulse width (0-100, 50 = square)
++ * graph="envelope" inputs: attack ms, decay ms, sustain (0-100), release ms
++ * graph="filter"   inputs: cutoff (0-100), resonance (0-100)
++ * graph="lfo"      inputs: frequency in Hz
++ *
++ * The enum value decides the shape: names containing saw/pulse/triangle, gate/envelope,
++ * low/high/band (for lowpass, highpass, bandpass).
++ */
++
++type GraphKind = "wave" | "envelope" | "filter" | "lfo";
++
++interface FieldSynthGraphOptions extends FieldCustomDropdownOptions {
++    graph?: GraphKind;
++    inputs?: string;
++    defaults?: string;
++}
++
++const SIZES: { [K in GraphKind]: [number, number] } = {
++    wave: [72, 34],
++    envelope: [150, 54],
++    filter: [150, 54],
++    lfo: [150, 40]
++};
++
++const SVG_NS = "http://www.w3.org/2000/svg";
++
++export class FieldSynthGraph extends Blockly.Field<string> implements FieldCustom {
++    public isFieldCustom_ = true;
++    public SERIALIZABLE = true;
++    public EDITABLE = true;
++    public CURSOR = "pointer";
++
++    protected options: [string, string][];
++    protected kind: GraphKind;
++    protected inputNames: string[];
++    protected inputDefaults: number[];
++    protected graphGroup: SVGGElement;
++    protected changeListener: (e: Blockly.Events.Abstract) => void;
++    protected lastKey: string;
++
++    constructor(text: string, params: FieldSynthGraphOptions, validator?: Blockly.FieldValidator) {
++        super(Blockly.Field.SKIP_SETUP);
++
++        this.options = ((params.data || []) as any[]).map(o => [typeof o[0] === "string" ? o[0] : (o[0]?.alt || o[1]), o[1]] as [string, string]);
++        this.kind = (params.graph || "wave") as GraphKind;
++        if (!SIZES[this.kind]) this.kind = "wave";
++        this.inputNames = (params.inputs || "").split(",").map(s => s.trim()).filter(s => !!s);
++        this.inputDefaults = (params.defaults || "").split(",").map(s => parseFloat(s));
++
++        const [w, h] = SIZES[this.kind];
++        this.size_ = new Blockly.utils.Size(w, h);
++
++        const initial = this.options.some(o => o[1] === text) ? text : this.options[0]?.[1];
++        this.setValue(initial);
++        if (validator) this.setValidator(validator);
++    }
++
++    protected doClassValidation_(newValue?: any): string | null {
++        if (typeof newValue !== "string") return null;
++        return this.options.some(o => o[1] === newValue) ? newValue : null;
++    }
++
++    getText_(): string {
++        const option = this.options.find(o => o[1] === this.getValue());
++        return option ? option[0] : "";
++    }
++
++    getFieldDescription(): string {
++        return this.getText_();
++    }
++
++    initView() {
++        this.graphGroup = Blockly.utils.dom.createSvgElement("g", {}, this.fieldGroup_) as SVGGElement;
++
++        const ws = this.sourceBlock_?.workspace;
++        if (ws) {
++            this.changeListener = (e: Blockly.Events.Abstract) => {
++                if (e.isUiEvent) return;
++                this.drawGraph();
++            };
++            ws.addChangeListener(this.changeListener);
++        }
++    }
++
++    dispose() {
++        const ws = this.sourceBlock_?.workspace;
++        if (ws && this.changeListener) ws.removeChangeListener(this.changeListener);
++        this.changeListener = undefined;
++        super.dispose();
++    }
++
++    protected render_() {
++        const [w, h] = SIZES[this.kind];
++        this.size_.width = w;
++        this.size_.height = h;
++        this.lastKey = undefined;
++        this.drawGraph();
++    }
++
++    protected showEditor_() {
++        if (!this.options.length) return;
++        const index = this.options.findIndex(o => o[1] === this.getValue());
++        this.setValue(this.options[(index + 1) % this.options.length][1]);
++    }
++
++    // ---------- reading sibling inputs ----------
++
++    protected readInputs(): number[] {
++        return this.inputNames.map((name, i) => {
++            const defl = isNaN(this.inputDefaults[i]) ? 0 : this.inputDefaults[i];
++            const target = this.sourceBlock_?.getInputTargetBlock(name);
++            if (!target) return defl;
++            for (const fieldName of ["SLIDER", "NUM"]) {
++                const field = target.getField(fieldName);
++                if (field) {
++                    const v = parseFloat(field.getValue() as any);
++                    return isNaN(v) ? defl : v;
++                }
++            }
++            return defl;
++        });
++    }
++
++    // ---------- drawing ----------
++
++    protected drawGraph() {
++        if (!this.graphGroup) return;
++        // only the enum member decides the shape ("gateOrEnv.ebvelope" -> "ebvelope")
++        const value = (this.getValue() || "").split(".").pop().toLowerCase();
++        const inputs = this.readInputs();
++        const key = value + "|" + inputs.join(",");
++        if (key === this.lastKey) return;
++        this.lastKey = key;
++
++        while (this.graphGroup.firstChild) this.graphGroup.removeChild(this.graphGroup.firstChild);
++        const [w, h] = SIZES[this.kind];
++
++        // the background is the click target (everything drawn on top ignores the pointer)
++        const bg = this.el("rect", { x: 0, y: 0, width: w, height: h, rx: 4, ry: 4, fill: "rgba(0,0,0,0.28)", stroke: "rgba(255,255,255,0.5)", "stroke-width": 1 });
++        bg.setAttribute("pointer-events", "all");
++        bg.setAttribute("cursor", "pointer");
++
++        switch (this.kind) {
++            case "wave": this.drawWave(value, inputs, w, h); break;
++            case "envelope": this.drawEnvelope(value, inputs, w, h); break;
++            case "filter": this.drawFilter(value, inputs, w, h); break;
++            case "lfo": this.drawLfo(value, inputs, w, h); break;
++        }
++    }
++
++    protected drawWave(value: string, inputs: number[], w: number, h: number) {
++        const pad = 5;
++        const top = pad + 2, bottom = h - pad, cycles = 2;
++        const cw = (w - pad * 2) / cycles;
++        const duty = clamp((inputs[0] ?? 50) / 100, 0.05, 0.95);
++        const shape = waveShape(value);
++        const pts: number[][] = [];
++        for (let c = 0; c < cycles; c++) {
++            const x0 = pad + c * cw;
++            if (shape === "pulse") {
++                pts.push([x0, top], [x0 + cw * duty, top], [x0 + cw * duty, bottom], [x0 + cw, bottom]);
++                if (c < cycles - 1) pts.push([x0 + cw, top]);
++            }
++            else if (shape === "triangle") {
++                pts.push([x0, bottom], [x0 + cw / 2, top], [x0 + cw, bottom]);
++            }
++            else {
++                pts.push([x0, bottom], [x0 + cw, top]);
++                if (c < cycles - 1) pts.push([x0 + cw, bottom]);
++            }
++        }
++        this.line(pts, 2);
++        this.label(this.getText_(), w - 3, h - 3, "end");
++    }
++
++    protected drawEnvelope(value: string, inputs: number[], w: number, h: number) {
++        const isGate = value.indexOf("gate") >= 0;
++        const a = Math.max(0, inputs[0] ?? 0), d = Math.max(0, inputs[1] ?? 0);
++        const s = clamp((inputs[2] ?? 50) / 100, 0, 1), r = Math.max(0, inputs[3] ?? 0);
++        const hold = Math.max(150, 0.3 * (a + d + r));
++        const total = a + d + hold + r || 1;
++
++        const left = 5, right = w - 5, top = 14, bottom = h - 5;
++        const span = right - left;
++        const x = (t: number) => left + t / total * span;
++        const y = (v: number) => bottom - v * (bottom - top);
++
++        const adsr = [
++            [x(0), y(0)], [x(a), y(1)], [x(a + d), y(s)], [x(a + d + hold), y(s)], [x(total), y(0)]
++        ];
++        const gate = [
++            [x(0), y(0)], [x(0) + 1.5, y(1)], [x(a + d + hold), y(1)], [x(a + d + hold) + 1.5, y(0)], [x(total), y(0)]
++        ];
++
++        // the amplitude follows the gate in gate mode; the envelope still drives the filter
++        if (isGate) {
++            this.line(adsr, 1, "rgba(255,255,255,0.45)", "3,2");
++            this.area(gate, bottom);
++            this.line(gate, 2);
++        }
++        else {
++            this.area(adsr, bottom);
++            this.line(adsr, 2);
++        }
++
++        // segment markers
++        for (const t of [a, a + d, a + d + hold]) {
++            this.el("line", { x1: x(t), y1: top - 2, x2: x(t), y2: bottom, stroke: "rgba(255,255,255,0.25)", "stroke-width": 1 });
++        }
++        this.label(isGate ? "gate" : "envelope", left, 10, "start");
++        this.label(`${fmtMs(a + d + r)} + hold`, right, 10, "end", 0.7);
++    }
++
++    protected drawFilter(value: string, inputs: number[], w: number, h: number) {
++        const cutoff = clamp((inputs[0] ?? 100) / 100, 0, 1);
++        const reso = clamp((inputs[1] ?? 0) / 100, 0, 1);
++        // same mapping as MicroSynth: note 40..127 scaled so that note 69 = 700 Hz
++        const fc = 700 * Math.pow(2, (cutoff * 87 + 40 - 69) / 12);
++        const q = 0.7 + reso * reso * 12;
++        const type = value.indexOf("high") >= 0 ? "high" : value.indexOf("band") >= 0 ? "band" : "low";
++
++        const left = 3, right = w - 3, top = 13, bottom = h - 3;
++        const fMin = Math.log10(30), fMax = Math.log10(20000);
++        const dbMin = -36, dbMax = 18;
++        const y0 = bottom - (0 - dbMin) / (dbMax - dbMin) * (bottom - top);
++
++        const pts: number[][] = [];
++        for (let px = left; px <= right; px += 1.5) {
++            const f = Math.pow(10, fMin + (px - left) / (right - left) * (fMax - fMin));
++            const ratio = f / fc;
++            const den = Math.sqrt((1 - ratio * ratio) ** 2 + (ratio / q) ** 2);
++            let mag = type === "high" ? ratio * ratio / den : type === "band" ? (ratio / q) / den : 1 / den;
++            const db = clamp(20 * Math.log10(Math.max(mag, 1e-6)), dbMin, dbMax);
++            pts.push([px, bottom - (db - dbMin) / (dbMax - dbMin) * (bottom - top)]);
++        }
++
++        this.el("line", { x1: left, y1: y0, x2: right, y2: y0, stroke: "rgba(255,255,255,0.25)", "stroke-width": 1, "stroke-dasharray": "2,2" });
++        const xc = left + (Math.log10(clamp(fc, 30, 20000)) - fMin) / (fMax - fMin) * (right - left);
++        this.el("line", { x1: xc, y1: top - 2, x2: xc, y2: bottom, stroke: "rgba(255,255,255,0.35)", "stroke-width": 1 });
++        this.area(pts, bottom);
++        this.line(pts, 2);
++        this.label(this.getText_(), left + 2, 10, "start");
++        this.label(fc >= 1000 ? `${(fc / 1000).toFixed(1)} kHz` : `${Math.round(fc)} Hz`, right - 2, 10, "end", 0.7);
++    }
++
++    protected drawLfo(value: string, inputs: number[], w: number, h: number) {
++        const freq = Math.max(0, inputs[0] ?? 0);
++        const shape = waveShape(value);
++        const left = 5, right = w - 5, top = 14, bottom = h - 4;
++        const mid = (top + bottom) / 2, amp = (bottom - top) / 2;
++
++        const pts: number[][] = [];
++        const steps = 240;
++        for (let i = 0; i <= steps; i++) {
++            const t = i / steps; // one second
++            const phase = (t * freq) % 1;
++            let v: number;
++            if (freq <= 0) v = 0;
++            else if (shape === "pulse") v = phase < 0.5 ? 1 : -1;
++            else if (shape === "triangle") v = 1 - 4 * Math.abs(phase - 0.5);
++            else v = 2 * phase - 1;
++            pts.push([left + t * (right - left), mid - v * amp]);
++        }
++        this.el("line", { x1: left, y1: mid, x2: right, y2: mid, stroke: "rgba(255,255,255,0.25)", "stroke-width": 1, "stroke-dasharray": "2,2" });
++        this.line(pts, 1.5);
++        this.label(`LFO ${this.getText_()}`, left, 10, "start");
++        this.label(`${+freq.toFixed(2)} Hz · 1 s`, right, 10, "end", 0.7);
++    }
++
++    // ---------- svg helpers ----------
++
++    protected el(name: string, attrs: { [k: string]: any }) {
++        const e = document.createElementNS(SVG_NS, name);
++        for (const k of Object.keys(attrs)) e.setAttribute(k, String(attrs[k]));
++        e.setAttribute("pointer-events", "none");
++        this.graphGroup.appendChild(e);
++        return e;
++    }
++
++    protected line(pts: number[][], width: number, stroke = "#ffffff", dash?: string) {
++        const attrs: any = {
++            points: pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" "),
++            fill: "none", stroke, "stroke-width": width, "stroke-linejoin": "round", "stroke-linecap": "round"
++        };
++        if (dash) attrs["stroke-dasharray"] = dash;
++        this.el("polyline", attrs);
++    }
++
++    protected area(pts: number[][], bottom: number) {
++        const all = [[pts[0][0], bottom], ...pts, [pts[pts.length - 1][0], bottom]];
++        this.el("polygon", {
++            points: all.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" "),
++            fill: "rgba(255,255,255,0.22)", stroke: "none"
++        });
++    }
++
++    protected label(text: string, x: number, y: number, anchor: "start" | "middle" | "end", opacity = 1, size = 9) {
++        // white text with an outline in the graph's background colour, drawn behind the
++        // letters (paint-order), so labels stay readable where they cross the graph lines
++        const t = this.el("text", {
++            x, y, "text-anchor": anchor,
++            "font-size": size, "font-family": "sans-serif", "font-weight": "bold"
++        });
++        // inline styles, because the renderer's ".blocklyEditableField>g>text { fill: #575E75 }"
++        // rule would override plain SVG attributes
++        t.setAttribute("style",
++            `fill: #ffffff; fill-opacity: ${opacity}; stroke: ${this.backgroundColour()}; stroke-width: 3px; ` +
++            `stroke-linejoin: round; paint-order: stroke;`);
++        t.textContent = text;
++    }
++
++    /** the solid colour of the graph background: the block colour under 28% black */
++    protected backgroundColour() {
++        const colour = (this.sourceBlock_ as Blockly.BlockSvg)?.getColour?.() || "#000000";
++        return Blockly.utils.colour.blend("#000000", colour, 0.28) || "#000000";
++    }
++}
++
++function clamp(v: number, min: number, max: number) {
++    return Math.max(min, Math.min(max, v));
++}
++
++function waveShape(value: string): "saw" | "pulse" | "triangle" {
++    if (value.indexOf("pulse") >= 0 || value.indexOf("square") >= 0) return "pulse";
++    if (value.indexOf("tri") >= 0) return "triangle";
++    return "saw";
++}
++
++function fmtMs(ms: number) {
++    return ms >= 1000 ? `${+(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`;
++}
++
++/**
++ * An ordinary enum dropdown (same as other MakeCode dropdowns) followed by two preview buttons.
++ * A button posts
++ *     { type: "custom", content: { type: <fieldOptions.message>, note, values } }
++ * to the simulator, where values holds every number input and field value of the block by name.
++ *
++ *     //% preset.fieldEditor="synthpreview"
++ *     //% preset.fieldOptions.message="synth-preview"   (default)
++ *     //% preset.fieldOptions.notes="48,60"             low / high MIDI notes (default)
++ */
++interface FieldSynthPreviewOptions extends FieldCustomDropdownOptions {
++    message?: string;
++    notes?: string;
++}
++
++const PREVIEW_BUTTON_WIDTH = 50;
++const PREVIEW_BUTTON_GAP = 4;
++
++export class FieldSynthPreview extends FieldDropdown implements FieldCustom {
++    public isFieldCustom_ = true;
++
++    protected message: string;
++    protected previewNotes: number[];
++    protected buttonGroup: SVGGElement;
++
++    constructor(text: string, params: FieldSynthPreviewOptions, validator?: Blockly.FieldValidator) {
++        const options = ((params.data || []) as any[]).map(o => [o[0], o[1]] as [string, string]);
++        super(options.length ? options : [["", ""]], validator);
++
++        this.message = params.message || "synth-preview";
++        const notes = (params.notes || "48,60").split(",").map(s => parseInt(s));
++        this.previewNotes = [isNaN(notes[0]) ? 48 : notes[0], isNaN(notes[1]) ? 60 : notes[1]];
++
++        if (options.some(o => o[1] === text)) this.setValue(text);
++    }
++
++    protected render_() {
++        super.render_();
++        if (!this.fieldGroup_) return;
++
++        // the dropdown has drawn itself (and its border) at its own size; add the buttons after it
++        const dropdownWidth = this.size_.width;
++        const height = this.size_.height;
++
++        if (!this.buttonGroup) {
++            this.buttonGroup = Blockly.utils.dom.createSvgElement("g", {}, this.fieldGroup_) as SVGGElement;
++            this.drawButton(0, "low", this.previewNotes[0]);
++            this.drawButton(PREVIEW_BUTTON_WIDTH + PREVIEW_BUTTON_GAP, "high", this.previewNotes[1]);
++        }
++        const buttonHeight = 24;
++        const x = dropdownWidth + PREVIEW_BUTTON_GAP * 2;
++        this.buttonGroup.setAttribute("transform", `translate(${x}, ${(height - buttonHeight) / 2})`);
++
++        this.size_.width = x + PREVIEW_BUTTON_WIDTH * 2 + PREVIEW_BUTTON_GAP;
++    }
++
++    protected drawButton(x: number, text: string, note: number) {
++        const h = 24;
++        const g = Blockly.utils.dom.createSvgElement("g", { transform: `translate(${x}, 0)`, cursor: "pointer" }, this.buttonGroup);
++        const rect = Blockly.utils.dom.createSvgElement("rect", {
++            x: 0, y: 0, width: PREVIEW_BUTTON_WIDTH, height: h, rx: 4, ry: 4,
++            fill: "#ffffff", "fill-opacity": 0.9, stroke: "rgba(0,0,0,0.3)", "stroke-width": 1
++        }, g);
++        Blockly.utils.dom.createSvgElement("polygon", {
++            points: `8,${h / 2 - 5} 8,${h / 2 + 5} 16,${h / 2}`, fill: "#333333", "pointer-events": "none"
++        }, g);
++        const label = Blockly.utils.dom.createSvgElement("text", {
++            x: 20, y: h / 2 + 4, fill: "#333333", "font-size": 11, "font-family": "sans-serif", "font-weight": "bold",
++            "pointer-events": "none"
++        }, g);
++        label.setAttribute("style", "fill: #333333;"); // see label(): renderer CSS beats the attribute
++        label.textContent = text;
++
++        g.addEventListener("pointerdown", (e: PointerEvent) => {
++            // keep the block from starting a drag and the dropdown from opening
++            e.stopPropagation();
++            e.preventDefault();
++            rect.setAttribute("fill-opacity", "0.6");
++            setTimeout(() => rect.setAttribute("fill-opacity", "0.9"), 150);
++            sendSynthPreview(this.sourceBlock_, this.message, note);
++        });
++    }
++}
++
++/** sends every number input and field value of the block, by name, to the simulator */
++function sendSynthPreview(block: Blockly.Block, message: string, note: number) {
++    if (!block) return;
++    const values: { [name: string]: number | string } = {};
++    for (const input of block.inputList) {
++        const target = input.connection?.targetBlock();
++        if (target) {
++            for (const fieldName of ["SLIDER", "NUM"]) {
++                const field = target.getField(fieldName);
++                if (field) {
++                    const v = parseFloat(field.getValue() as any);
++                    if (!isNaN(v)) values[input.name] = v;
++                    break;
++                }
++            }
++        }
++        for (const field of input.fieldRow) {
++            if (field.name && field.SERIALIZABLE) values[field.name] = String(field.getValue());
++        }
++    }
++    postSimulatorMessage({ type: "custom", content: { type: message, note, values } } as pxsim.SimulatorCustomMessage);
++}
+diff --git a/pxtblocks/fields/field_utils.ts b/pxtblocks/fields/field_utils.ts
+index af708b1..118a51a 100644
+--- a/pxtblocks/fields/field_utils.ts
++++ b/pxtblocks/fields/field_utils.ts
+@@ -177,8 +177,31 @@ export function tilemapToImageURI(data: pxt.sprite.TilemapData, sideLength: numb
+     return canvas.toDataURL();
+ }
+ 
+-export function songToDataURI(song: pxt.assets.music.Song, width: number, height: number, lightMode: boolean, maxMeasures?: number) {
+-    const colors = pxt.appTarget.runtime.palette.slice();
++// Lets fields send messages to the simulator iframe. pxtblocks has no access to the simulator
++// driver, so the webapp registers a handler at startup (webapp/src/simulator.ts).
++let simulatorMessageHandler: (msg: pxsim.SimulatorMessage) => void;
++
++export function setSimulatorMessageHandler(handler: (msg: pxsim.SimulatorMessage) => void) {
++    simulatorMessageHandler = handler;
++}
++
++export function postSimulatorMessage(msg: pxsim.SimulatorMessage): boolean {
++    if (!simulatorMessageHandler) return false;
++    simulatorMessageHandler(msg);
++    return true;
++}
++
++/**
++ * @param trackColors optional CSS colours by track position; overrides the palette-based colours
++ */
++export function songToDataURI(song: pxt.assets.music.Song, width: number, height: number, lightMode: boolean, maxMeasures?: number, trackColors?: string[]) {
++    // Not every target defines a palette (micro:bit doesn't), so fall back to a fixed one.
++    // Without this the preview threw before drawing anything.
++    const palette = pxt.appTarget.runtime?.palette;
++    const colors = palette && palette.length >= 16 ? palette.slice() : [
++        "#000000", "#ffffff", "#ff2121", "#ff93c4", "#ff8135", "#fff609", "#249ca3", "#78dc52",
++        "#003fad", "#87f2ff", "#8e2ec4", "#a4839f", "#5c406c", "#e5cdc4", "#91463d", "#000000"
++    ];
+     const canvas = document.createElement("canvas");
+     canvas.width = width;
+     canvas.height = height;
+@@ -193,7 +216,7 @@ export function songToDataURI(song: pxt.assets.music.Song, width: number, height
+         context = canvas.getContext("2d");
+     }
+ 
+-    const trackColors = [
++    const paletteTrackColors = [
+         5,  // duck
+         11, // cat
+         5,  // dog
+@@ -207,24 +230,48 @@ export function songToDataURI(song: pxt.assets.music.Song, width: number, height
+     ]
+ 
+     maxMeasures = maxMeasures || song.measures;
++    const totalTicks = Math.max(1, song.beatsPerMeasure * song.ticksPerBeat * maxMeasures);
+ 
+-    const cellWidth = Math.max(Math.floor(width / (song.beatsPerMeasure * maxMeasures * 2)), 1);
+-    const cellsShown = Math.floor(width / cellWidth);
++    // vertical range: the notes actually used, at least one octave
++    let minNote = Infinity, maxNote = -Infinity;
++    for (const track of song.tracks) {
++        if (track.drums) continue;
++        for (const noteEvent of track.notes) {
++            for (const note of noteEvent.notes) {
++                minNote = Math.min(minNote, note.note);
++                maxNote = Math.max(maxNote, note.note);
++            }
++        }
++    }
++    if (minNote === Infinity) { minNote = 37; maxNote = 48; }
++    if (maxNote - minNote < 11) {
++        const extra = 11 - (maxNote - minNote);
++        minNote -= Math.floor(extra / 2);
++        maxNote += Math.ceil(extra / 2);
++    }
++    const rows = maxNote - minNote + 1;
++    const cellHeight = Math.max(height / rows, 1);
++    const tickWidth = width / totalTicks;
+ 
+-    const cellHeight = Math.max(Math.floor(height / 12), 1);
+-    const notesShown = Math.floor(height / cellHeight);
++    // beat grid
++    context.fillStyle = lightMode ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.12)";
++    for (let tick = 0; tick < totalTicks; tick += song.ticksPerBeat) {
++        context.fillRect(Math.floor(tick * tickWidth), 0, 1, height);
++    }
+ 
+     for (const track of song.tracks) {
++        const trackIndex = song.tracks.indexOf(track);
++        context.fillStyle = trackColors?.length
++            ? trackColors[trackIndex % trackColors.length]
++            : colors[paletteTrackColors[(track.id || trackIndex) % paletteTrackColors.length]] || "#249ca3";
+         for (const noteEvent of track.notes) {
+-            const col = Math.floor(noteEvent.startTick / (song.ticksPerBeat / 2));
+-            if (col > cellsShown) break;
++            if (noteEvent.startTick >= totalTicks) break;
++            const x = noteEvent.startTick * tickWidth;
++            const w = Math.max((noteEvent.endTick - noteEvent.startTick) * tickWidth - 1, 1);
+ 
+             for (const note of noteEvent.notes) {
+-                const row = 12 - (note.note % 12);
+-                if (row > notesShown) continue;
+-
+-                context.fillStyle = colors[trackColors[track.id || song.tracks.indexOf(track)]];
+-                context.fillRect(col * cellWidth, row * cellHeight, cellWidth, cellHeight);
++                const row = track.drums ? rows - 1 - (note.note % rows) : maxNote - note.note;
++                context.fillRect(x, row * cellHeight, w, Math.max(cellHeight - 0.5, 1));
+             }
+         }
+     }
+diff --git a/pxtblocks/loader.ts b/pxtblocks/loader.ts
+index 94cdcda..52a1f6c 100644
+--- a/pxtblocks/loader.ts
++++ b/pxtblocks/loader.ts
+@@ -1,6 +1,7 @@
+ /// <reference path="../built/pxtlib.d.ts" />
+ import * as Blockly from "blockly";
+ import { optionalDummyInputPrefix, optionalInputWithFieldPrefix, provider } from "./constants";
++import { FieldRowSeparator } from "./fields/field_row_separator";
+ import { initExpandableBlock, initVariableArgsBlock, appendMutation, initVariableReporterArgs } from "./composableMutations";
+ import { addMutation, MutatingBlock, MutatorTypes } from "./legacyMutations";
+ import { initMath } from "./builtins/math";
+@@ -435,6 +436,19 @@ function initBlock(block: Blockly.Block, info: pxtc.BlocksInfo, fn: pxtc.SymbolI
+ 
+         const inputs = splitInputs(def);
+         const imgConv = new pxt.ImageConverter()
++        const rowBreaks = !!fn.attributes.inlineRowBreaks;
++
++        // Ends the current row in inline mode. Inside the expandable part it is named like an
++        // optional label, so it is only shown once a parameter after it is revealed.
++        const appendRowEnd = () => {
++            if (expanded) {
++                const name = optionalDummyInputPrefix + (anonIndex++);
++                if (!hasInput(name)) block.appendEndRowInput(name);
++            }
++            else {
++                block.appendEndRowInput();
++            }
++        };
+ 
+         if (fn.attributes.shim === "ENUM_GET" || fn.attributes.shim === "KIND_GET") {
+             if (comp.parameters.length > 1 || comp.thisParameter) {
+@@ -445,7 +459,31 @@ function initBlock(block: Blockly.Block, info: pxtc.BlocksInfo, fn: pxtc.SymbolI
+ 
+         const hasInput = (name: string) => block.inputList?.some(i => i.name === name);
+ 
++        // Sections of the expandable part start at optional parameter 0 and at each expandableArgumentBreaks
++        // index. With expandableArgumentSeparators a line row goes before each one; it is named like an
++        // optional label, so it only shows once the section's first parameter is revealed.
++        const separators = rowBreaks && expanded && !!fn.attributes.expandableArgumentSeparators;
++        const sectionStarts = [0].concat((fn.attributes.expandableArgumentBreaks || "")
++            .split(/[;,]/).map(s => parseInt(s)).filter(n => !isNaN(n)));
++        let optionalParamIndex = 0;
++        // Every pass over the expandable part must use up anonIndex the same way, even when the
++        // inputs already exist (domToMutation builds it again on load); otherwise later names shift,
++        // the duplicate check misses and inputs get added twice.
++        const appendSeparator = () => {
++            const name = optionalDummyInputPrefix + (anonIndex++);
++            if (!hasInput(name)) block.appendDummyInput(name).appendField(new FieldRowSeparator());
++            appendRowEnd();
++        };
++
++        // the expandable part starts on its own row
++        if (rowBreaks && expanded && inputs.length) appendRowEnd();
++
+         inputs.forEach(inputParts => {
++            if (expanded && inputParts.some(part => part.kind === "param")) {
++                if (separators && sectionStarts.indexOf(optionalParamIndex) >= 0) appendSeparator();
++                optionalParamIndex++;
++            }
++
+             const fields: NamedField[] = [];
+             let inputName: string;
+             let inputCheck: string | string[];
+@@ -621,8 +659,11 @@ function initBlock(block: Blockly.Block, info: pxtc.BlocksInfo, fn: pxtc.SymbolI
+             let input: Blockly.Input;
+ 
+             if (inputName) {
+-                // Don't add duplicate inputs
+-                if (hasInput(inputName)) return;
++                // Don't add duplicate inputs (but keep row-end naming in step, see appendSeparator)
++                if (hasInput(inputName)) {
++                    if (rowBreaks && (inputParts as BlockInputParts).endsRow) appendRowEnd();
++                    return;
++                }
+ 
+                 input = block.appendValueInput(inputName);
+                 input.setAlign(Blockly.inputs.Align.LEFT);
+@@ -632,8 +673,11 @@ function initBlock(block: Blockly.Block, info: pxtc.BlocksInfo, fn: pxtc.SymbolI
+                 const prefix = hasParameter ? optionalInputWithFieldPrefix : optionalDummyInputPrefix;
+                 inputName = prefix + (anonIndex++);
+ 
+-                // Don't add duplicate inputs
+-                if (hasInput(inputName)) return;
++                // Don't add duplicate inputs (but keep row-end naming in step, see appendSeparator)
++                if (hasInput(inputName)) {
++                    if (rowBreaks && (inputParts as BlockInputParts).endsRow) appendRowEnd();
++                    return;
++                }
+                 input = block.appendDummyInput(inputName);
+             }
+             else {
+@@ -645,6 +689,8 @@ function initBlock(block: Blockly.Block, info: pxtc.BlocksInfo, fn: pxtc.SymbolI
+             }
+ 
+             fields.forEach(f => input.appendField(f.field, f.name));
++
++            if (rowBreaks && (inputParts as BlockInputParts).endsRow) appendRowEnd();
+         });
+ 
+         imgConv.logTime()
+@@ -1004,14 +1050,18 @@ function initJresIcons(blockInfo: pxtc.BlocksInfo) {
+     })
+ }
+ 
+-function splitInputs(def: pxtc.ParsedBlockDef): pxtc.BlockContentPart[][] {
+-    const res: pxtc.BlockContentPart[][] = [];
++// endsRow: a "|" break followed this group (used by the inlineRowBreaks attribute)
++type BlockInputParts = pxtc.BlockContentPart[] & { endsRow?: boolean };
++
++function splitInputs(def: pxtc.ParsedBlockDef): BlockInputParts[] {
++    const res: BlockInputParts[] = [];
+     let current: pxtc.BlockContentPart[] = [];
+ 
+     def.parts.forEach(part => {
+         switch (part.kind) {
+             case "break":
+                 newInput();
++                if (res.length) res[res.length - 1].endsRow = true;
+                 break;
+             case "param":
+                 current.push(part);
+diff --git a/pxtlib/shared/commentattrs.ts b/pxtlib/shared/commentattrs.ts
+index c1c3dee..0ad08d8 100644
+--- a/pxtlib/shared/commentattrs.ts
++++ b/pxtlib/shared/commentattrs.ts
+@@ -69,6 +69,8 @@ namespace ts.pxtc {
+         "duplicateShadowOnDrag",
+         "argsNullable",
+         "compileHiddenArguments",
++        "inlineRowBreaks",
++        "expandableArgumentSeparators",
+         "expandArgumentsInToolbox",
+         "gridLiteralUseProjectPalette"
+     ];
+diff --git a/theme/piano-roll/piano-roll.less b/theme/piano-roll/piano-roll.less
+index e45219d..852bee1 100644
+--- a/theme/piano-roll/piano-roll.less
++++ b/theme/piano-roll/piano-roll.less
+@@ -108,6 +108,26 @@
+         }
+     }
+ 
++    // showSequenceTools: clear / transpose / nudge (sized like the playback buttons)
++    .sequence-tools {
++        display: flex;
++        align-items: center;
++        gap: 0.25rem;
++        margin-left: 0.5rem;
++
++        .common-button {
++            height: calc(var(--header-height) - 0.3rem);
++            width: calc(var(--header-height) - 0.3rem);
++            min-width: 0;
++            padding: 0;
++            margin: 0;
++        }
++
++        .music-editor-label {
++            margin-left: 0.5rem;
++        }
++    }
++
+     &>.common-dropdown {
+         .common-button {
+             min-width: 4.75rem;
+diff --git a/webapp/src/components/musicEditor/playback.ts b/webapp/src/components/musicEditor/playback.ts
+index 603fd2b..372a9dc 100644
+--- a/webapp/src/components/musicEditor/playback.ts
++++ b/webapp/src/components/musicEditor/playback.ts
+@@ -1,3 +1,5 @@
++import { isSimOutputEnabled, onSimPlaybackTick, resetSimPlayback } from "../pianoRoll/simOutput";
++
+ let sequencer: pxsim.music.Sequencer;
+ let playbackStateListeners: ((state: "play" | "loop" | "stop") => void)[] = [];
+ let onTickListeners: ((tick: number) => void)[] = [];
+@@ -17,13 +19,16 @@ export async function startPlaybackAsync(song: pxt.assets.music.Song, loop: bool
+         });
+ 
+         sequencer.addEventListener("tick", () => {
++            if (isSimOutputEnabled()) onSimPlaybackTick(playbackSong, sequencer.currentTick());
+             for (const listener of onTickListeners) {
+                 listener(sequencer.currentTick());
+             }
+         });
+-        sequencer.setVolume(100);
+     }
+ 
++    // with simulator instruments the notes are played by the simulator, see simOutput.ts
++    sequencer.setVolume(isSimOutputEnabled() ? 0 : 100);
++    resetSimPlayback(ticks || 0);
+     sequencer.startFrom(song, loop, ticks);
+ }
+ 
+diff --git a/webapp/src/components/pianoRoll/Header.tsx b/webapp/src/components/pianoRoll/Header.tsx
+index a215162..8e084b9 100644
+--- a/webapp/src/components/pianoRoll/Header.tsx
++++ b/webapp/src/components/pianoRoll/Header.tsx
+@@ -16,6 +16,8 @@ interface Props {
+     selectedTimeSignature: string;
+     showAssetName: boolean;
+     assetName?: string;
++    // one track only (fieldOptions.singleTrack): no track selector / new track / delete track
++    hideTrackSelect?: boolean;
+ 
+     onTrackSelected(trackId: number): void;
+     onTrackCreated(): void;
+@@ -39,6 +41,7 @@ export const Header = (props: Props) => {
+         selectedTimeSignature,
+         showAssetName,
+         assetName,
++        hideTrackSelect,
+         onAssetNameChanged,
+         onVelocityEditorToggle,
+         onTrackSelected,
+@@ -239,12 +242,14 @@ export const Header = (props: Props) => {
+                     onClose={closeModal}
+                 />
+             }
+-            <Dropdown
+-                id="track-select"
+-                items={trackDropdownOptions}
+-                selectedId={trackId(selectedTrack)}
+-                onItemSelected={onTrackDropdownChange}
+-            />
++            {!hideTrackSelect &&
++                <Dropdown
++                    id="track-select"
++                    items={trackDropdownOptions}
++                    selectedId={trackId(selectedTrack)}
++                    onItemSelected={onTrackDropdownChange}
++                />
++            }
+             <Dropdown
+                 id="instrument-select"
+                 items={song.instruments.map(
+diff --git a/webapp/src/components/pianoRoll/NoteEvent.tsx b/webapp/src/components/pianoRoll/NoteEvent.tsx
+index 6a86672..38f904c 100644
+--- a/webapp/src/components/pianoRoll/NoteEvent.tsx
++++ b/webapp/src/components/pianoRoll/NoteEvent.tsx
+@@ -1,7 +1,7 @@
+ import { classList } from "../../../../react-common/components/util";
+ import { usePianoRollTheme } from "./context";
+ import { NoteEvent } from "./types";
+-import { getNoteName, noteLeft, noteTop, noteWidth } from "./utils";
++import { getMidiNumber, getNoteName, noteLeft, noteTop, noteWidth } from "./utils";
+ 
+ interface Props {
+     event: NoteEvent;
+@@ -26,8 +26,12 @@ export const NoteEventView = (props: Props) => {
+             }}
+             data-tick={start}
+             data-note={note}
++            title={theme.showMidiNumbers && !isDrumTrack ? `${getNoteName(note)} (MIDI ${getMidiNumber(note)})` : undefined}
+         >
+             {(isDrumTrack || duration <= 1) ? undefined : getNoteName(note)}
++            {theme.showMidiNumbers && !isDrumTrack && duration > 1 &&
++                <span style={{ fontSize: "0.75em", marginLeft: "0.2em", opacity: 0.8 }}>{getMidiNumber(note)}</span>
++            }
+         </div>
+     );
+ }
+\ No newline at end of file
+diff --git a/webapp/src/components/pianoRoll/PianoOctave.tsx b/webapp/src/components/pianoRoll/PianoOctave.tsx
+index e2f0264..7a1dc9f 100644
+--- a/webapp/src/components/pianoRoll/PianoOctave.tsx
++++ b/webapp/src/components/pianoRoll/PianoOctave.tsx
+@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef } from "react";
+ import { classList } from "../../../../react-common/components/util";
+ import { addNoteChangeListener, removeNoteChangeListener } from "../musicEditor/playback";
+ import { Instrument, isDrumInstrument } from "./types";
+-import { getNoteName, isBlackKey, range} from "./utils";
++import { isSimOutputEnabled, sendSimNote, simInstrumentIndex } from "./simOutput";
++import { getMidiNumber, getNoteName, isBlackKey, range} from "./utils";
++import { usePianoRollTheme } from "./context";
+ 
+ interface Props {
+     octave: number;
+@@ -15,6 +17,7 @@ export const PianoOctave = (props: Props) => {
+ 
+     const containerRef = useRef<HTMLDivElement>(null);
+     const isDrum = isDrumInstrument(instrument);
++    const { showMidiNumbers } = usePianoRollTheme();
+ 
+     useEffect(() => {
+         const container = containerRef.current;
+@@ -63,6 +66,10 @@ export const PianoOctave = (props: Props) => {
+                 await pxsim.music.playDrumAsync(drum);
+             }
+         }
++        else if (isSimOutputEnabled()) {
++            sendSimNote(Math.max(0, simInstrumentIndex(instrument.instrument)), note, 127, 300);
++            await new Promise(resolve => setTimeout(resolve, 300));
++        }
+         else {
+             await pxsim.music.playNoteAsync(note + 1, instrument.instrument, 300)
+         }
+@@ -79,7 +86,8 @@ export const PianoOctave = (props: Props) => {
+                 range(0, 12).map(index => {
+                     const note = (11 - index) + octave * 12;
+                     const isBlack = isBlackKey(note);
+-                    const noteName = isDrum ? instrument.drums[note].name! : getNoteName(note);
++                    const noteName = isDrum ? instrument.drums[note].name! :
++                        showMidiNumbers ? `${getNoteName(note)} (MIDI ${getMidiNumber(note)})` : getNoteName(note);
+ 
+                     const classes = classList(
+                         isDrum ? "drum" : "key",
+@@ -87,7 +95,9 @@ export const PianoOctave = (props: Props) => {
+                         getNoteName(note, false).replace("#", "sharp")
+                     );
+ 
+-                    const text = ((note % 12) && !isDrum) ? undefined : noteName; // Only show note name for C notes
++                    // Only show note name for C notes
++                    const text = ((note % 12) && !isDrum) ? undefined :
++                        (showMidiNumbers && !isDrum ? `${getNoteName(note)} · ${getMidiNumber(note)}` : noteName);
+ 
+                     const onClick = () => {
+                         playNote(note);
+diff --git a/webapp/src/components/pianoRoll/PianoRoll.tsx b/webapp/src/components/pianoRoll/PianoRoll.tsx
+index 85cc1e3..8340030 100644
+--- a/webapp/src/components/pianoRoll/PianoRoll.tsx
++++ b/webapp/src/components/pianoRoll/PianoRoll.tsx
+@@ -2,7 +2,7 @@ import { PianoRollTheme, PianoRollThemeProvider, usePianoRollThemeContext } from
+ import { Workspace } from "./Workspace"
+ import { Sidebar } from "./Sidebar"
+ import { useEffect, useRef, useState, useCallback, useMemo } from "react"
+-import { applyFloatingLayer, changeMeasures, changeOctaves, changeTimeSignature, changeTrackInstrument, cloneSong, deleteFloatingLayer, deleteSelection, fromPXTSong, getEmptySong, isDrumInstrument, moveFloatingLayer, moveSelection, newTrack, NoteEvent, NOTE_RANGES, selectionToFloatingLayer, Song, TIME_SIGNATURES, toPXTSong, Track, transposeFloatingLayer, transposeSelection, updateNoteEvent, updateNoteEvents, updateTrack, WorkspaceSelection } from "./types"
++import { lf, applyFloatingLayer, changeMeasures, changeOctaves, changeTimeSignature, changeTrackInstrument, cloneSong, deleteFloatingLayer, deleteSelection, fromPXTSong, getEmptySong, isDrumInstrument, moveFloatingLayer, moveSelection, newTrack, NoteEvent, NOTE_RANGES, selectionToFloatingLayer, Song, TIME_SIGNATURES, toPXTSong, Track, transposeFloatingLayer, transposeSelection, updateNoteEvent, updateNoteEvents, updateTrack, WorkspaceSelection } from "./types"
+ import { Header } from "./Header"
+ import { DeleteTrackModal } from "./DeleteTrackModal"
+ import { DeleteErrorModal } from "./DeleteErrorModal"
+@@ -19,6 +19,9 @@ import { getCopiedData, setCopiedData } from "./clipboard"
+ import { xToTick } from "./utils"
+ import { OctaveWarningModal } from "./OctaveWarningModal"
+ import { AssetModel, useModelValue } from "../musicEditor/AssetModel"
++import { applySimInstruments, isSimOutputEnabled, sendSimNote, setSimOutputEnabled, simInstrumentIndex } from "./simOutput"
++import { clearSong, mergeTracks, nudgeSong, transposeSong } from "./sequenceTools"
++import { Button } from "../../../../react-common/components/controls/Button"
+ 
+ interface PianoRollProps {
+     model: PianoRollModel;
+@@ -51,6 +54,13 @@ export interface FieldEditorParams {
+     maxOctave?: number;
+     showTimeSignature?: boolean;
+     showSnapControls?: boolean;
++    showMidiNumbers?: boolean;
++    // footer buttons: clear, transpose -/+, nudge </> (sequenceTools.ts)
++    showSequenceTools?: boolean;
++    // one track per song: hide the track selector and merge extra tracks on open
++    singleTrack?: boolean;
++    // names of instruments that only exist in the simulator, see simOutput.ts
++    simInstruments?: string[];
+ }
+ 
+ interface StateSnapshot {
+@@ -112,9 +122,30 @@ const PianoRollInternal = (props: PianoRollProps) => {
+             newTheme.borderColor = fieldEditorParams.borderColor;
+         }
+ 
++        newTheme.showMidiNumbers = !!fieldEditorParams?.showMidiNumbers;
++
+         updateTheme(newTheme);
+     }, [fieldEditorParams, updateTheme]);
+ 
++    const simInstruments = fieldEditorParams?.simInstruments;
++    const simInstrumentsKey = simInstruments?.join(",");
++
++    useEffect(() => {
++        setSimOutputEnabled(!!simInstruments?.length);
++        return () => setSimOutputEnabled(false);
++    }, [simInstrumentsKey]);
++
++    const singleTrack = !!fieldEditorParams?.singleTrack;
++
++    useEffect(() => {
++        let newSong = song;
++        if (simInstruments?.length) newSong = applySimInstruments(newSong, simInstruments);
++        if (singleTrack) newSong = mergeTracks(newSong);
++        if (newSong !== song) {
++            model.updateValue({ song: newSong, selectedTrackIndex: singleTrack ? 0 : selectedTrackIndex, assetName }, { preserveUndo: true, pushUndo: false });
++        }
++    }, [simInstrumentsKey, singleTrack, song]);
++
+ 
+     const updateSong = (newSong: Song, newIndex?: number, pushUndo?: boolean) => {
+         model.updateValue({
+@@ -355,6 +386,9 @@ const PianoRollInternal = (props: PianoRollProps) => {
+             const drum = instrument.drums[note];
+             pxsim.music.playDrumAsync(drum)
+         }
++        else if (isSimOutputEnabled()) {
++            sendSimNote(Math.max(0, simInstrumentIndex(instrument.instrument)), note, 127, 300);
++        }
+         else {
+             pxsim.music.playNoteAsync(note + 1, instrument.instrument, 300)
+         }
+@@ -586,6 +620,7 @@ const PianoRollInternal = (props: PianoRollProps) => {
+                         onSnapChanged={setSnapTicks}
+                         onTimeSignatureChanged={onTimeSignatureChanged}
+                         showAssetName={true}
++                        hideTrackSelect={singleTrack}
+                         assetName={assetName}
+                         onAssetNameChanged={onNameChange}
+                     />
+@@ -653,6 +688,42 @@ const PianoRollInternal = (props: PianoRollProps) => {
+                         onItemSelected={onTimeSignatureChanged}
+                     />
+                 }
++                {fieldEditorParams?.showSequenceTools &&
++                    <div className="sequence-tools mobile-hidden">
++                        <Button
++                            className="square-button"
++                            title={lf("Clear all notes")}
++                            leftIcon="fas fa-trash"
++                            onClick={() => updateSong(clearSong(song))}
++                        />
++                        <div className="music-editor-label">{lf("Transpose:")}</div>
++                        <Button
++                            className="square-button"
++                            title={lf("Transpose down a semitone")}
++                            leftIcon="fas fa-minus"
++                            onClick={() => { const s = transposeSong(song, -1); if (s !== song) updateSong(s); }}
++                        />
++                        <Button
++                            className="square-button"
++                            title={lf("Transpose up a semitone")}
++                            leftIcon="fas fa-plus"
++                            onClick={() => { const s = transposeSong(song, 1); if (s !== song) updateSong(s); }}
++                        />
++                        <div className="music-editor-label">{lf("Nudge:")}</div>
++                        <Button
++                            className="square-button"
++                            title={lf("Move all notes one step earlier (wraps around)")}
++                            leftIcon="fas fa-chevron-left"
++                            onClick={() => updateSong(nudgeSong(song, -(fieldEditorParams?.showSnapControls ? snapTicks : 1)))}
++                        />
++                        <Button
++                            className="square-button"
++                            title={lf("Move all notes one step later (wraps around)")}
++                            leftIcon="fas fa-chevron-right"
++                            onClick={() => updateSong(nudgeSong(song, fieldEditorParams?.showSnapControls ? snapTicks : 1))}
++                        />
++                    </div>
++                }
+                 <div className="spacer" />
+                 {showEditControls &&
+                     <EditControls
+diff --git a/webapp/src/components/pianoRoll/context.tsx b/webapp/src/components/pianoRoll/context.tsx
+index 3739f53..b908c1c 100644
+--- a/webapp/src/components/pianoRoll/context.tsx
++++ b/webapp/src/components/pianoRoll/context.tsx
+@@ -13,6 +13,8 @@ export interface PianoRollTheme {
+     blackKeyWorkspaceColor: string;
+     maxPolyphony: number;
+     borderColor?: string;
++    // label notes and keys with the MIDI note number too (fieldOptions.showMidiNumbers)
++    showMidiNumbers?: boolean;
+ }
+ 
+ const defaultTheme: PianoRollTheme = {
+diff --git a/webapp/src/components/pianoRoll/sequenceTools.ts b/webapp/src/components/pianoRoll/sequenceTools.ts
+new file mode 100644
+index 0000000..8b00bd1
+--- /dev/null
++++ b/webapp/src/components/pianoRoll/sequenceTools.ts
+@@ -0,0 +1,113 @@
++import { applyFloatingLayer, isDrumInstrument, NOTE_RANGES, NoteEvent, Song, Track, transposeFloatingLayer } from "./types";
++
++/**
++ * Whole-sequence edit tools for the piano roll footer, enabled with
++ *     //% song.fieldOptions.showSequenceTools=true
++ * All of them return a new song (or the same song when nothing can change).
++ */
++
++/** Remove every note from every track */
++export function clearSong(song: Song): Song {
++    return {
++        ...song,
++        floatingLayer: undefined,
++        tracks: song.tracks.map(t => ({ ...t, events: [] }))
++    };
++}
++
++/**
++ * Move notes up or down by semitones. If notes are selected only those move, otherwise
++ * every note on every melodic track. A track's visible octave range is widened to the
++ * smallest standard range that still shows all its notes; if no range fits, nothing changes.
++ */
++export function transposeSong(song: Song, semitones: number): Song {
++    if (!semitones) return song;
++    if (song.floatingLayer) return transposeFloatingLayer(song, semitones);
++
++    const tracks: Track[] = [];
++    for (const track of song.tracks) {
++        if (isDrumTrack(song, track) || !track.events.length) {
++            tracks.push(track);
++            continue;
++        }
++
++        const events = track.events.map(e => ({ ...e, note: e.note + semitones }));
++        const range = fitRange(track, events);
++        if (!range) return song;
++
++        tracks.push({ ...track, events, minOctave: range.minOctave, maxOctave: range.maxOctave });
++    }
++
++    return { ...song, tracks };
++}
++
++/**
++ * Move every note forwards or backwards in time by deltaTicks, wrapping around the end of
++ * the sequence. A note that would hang over the end after wrapping is shortened to fit.
++ */
++export function nudgeSong(song: Song, deltaTicks: number): Song {
++    if (!deltaTicks) return song;
++    song = applyFloatingLayer(song);
++
++    const totalTicks = song.measures * song.beatsPerMeasure * song.ticksPerBeat;
++    if (totalTicks <= 0) return song;
++
++    const tracks = song.tracks.map(track => {
++        const events: NoteEvent[] = track.events.map(e => {
++            const start = ((e.start + deltaTicks) % totalTicks + totalTicks) % totalTicks;
++            return { ...e, start, duration: Math.max(1, Math.min(e.duration, totalTicks - start)) };
++        });
++        // playback and the editor expect events in start order
++        events.sort((a, b) => a.start - b.start || a.note - b.note);
++        return { ...track, events };
++    });
++
++    return { ...song, tracks };
++}
++
++/**
++ * Merge every track into the first one (used with fieldOptions.singleTrack, where one
++ * song is one sequence with one sound). The first track keeps its instrument.
++ */
++export function mergeTracks(song: Song): Song {
++    if (song.tracks.length <= 1) return song;
++    song = applyFloatingLayer(song);
++
++    const first = song.tracks[0];
++    let nextId = 0;
++    const events: NoteEvent[] = [];
++    for (const track of song.tracks) {
++        if (track !== first && isDrumTrack(song, track)) continue;
++        for (const e of track.events) events.push({ ...e, id: nextId++ });
++    }
++    events.sort((a, b) => a.start - b.start || a.note - b.note);
++    const range = fitRange(first, events) || { minOctave: first.minOctave, maxOctave: first.maxOctave };
++
++    return {
++        ...song,
++        tracks: [{ ...first, events, nextId, minOctave: range.minOctave, maxOctave: range.maxOctave }]
++    };
++}
++
++function isDrumTrack(song: Song, track: Track) {
++    const instrument = song.instruments.find(i => i.id === track.instrumentId);
++    return !!instrument && isDrumInstrument(instrument);
++}
++
++function fitRange(track: Track, events: NoteEvent[]) {
++    if (!events.length) return { minOctave: track.minOctave, maxOctave: track.maxOctave };
++    let lowest = Infinity, highest = -Infinity;
++    for (const e of events) {
++        lowest = Math.min(lowest, e.note);
++        highest = Math.max(highest, e.note);
++    }
++    const fits = (min: number, max: number) => lowest >= min * 12 && highest <= (max + 1) * 12 - 1;
++
++    if (fits(track.minOctave, track.maxOctave)) return { minOctave: track.minOctave, maxOctave: track.maxOctave };
++
++    // smallest standard range that shows every note
++    const candidates = NOTE_RANGES
++        .filter(r => fits(r.minOctave, r.maxOctave))
++        .sort((a, b) => (a.maxOctave - a.minOctave) - (b.maxOctave - b.minOctave));
++    return candidates[0];
++}
+diff --git a/webapp/src/components/pianoRoll/simOutput.ts b/webapp/src/components/pianoRoll/simOutput.ts
+new file mode 100644
+index 0000000..182fadc
+--- /dev/null
++++ b/webapp/src/components/pianoRoll/simOutput.ts
+@@ -0,0 +1,143 @@
++import * as simulator from "../../simulator";
++import { Instrument, isMelodicInstrument, Song } from "./types";
++
++/**
++ * "Simulator instruments": a piano roll field can declare
++ *     //% song.fieldOptions.simInstruments="Sound 1,Sound 2,Sound 3"
++ * to replace the built-in instruments (Dog, Duck, ...) with a list of
++ * instruments that only exist in the target's simulator (e.g. synth presets).
++ *
++ * Instrument i is stored in the song buffer with waveform SIM_INSTRUMENT_BASE + i,
++ * so the program can tell which one a track uses. All preview audio is then sent
++ * to the simulator iframe as a custom message instead of being played by pxsim.music:
++ *
++ *     { type: "custom", content: { type: "pianoroll-note", instrument, note, velocity, duration } }
++ *
++ * note is a MIDI note number (60 = middle C), velocity 0-127, duration in ms.
++ */
++
++export const SIM_INSTRUMENT_BASE = 200;
++export const SIM_NOTE_MESSAGE = "pianoroll-note";
++
++let simOutputEnabled = false;
++
++export function setSimOutputEnabled(enabled: boolean) {
++    simOutputEnabled = enabled;
++}
++
++export function isSimOutputEnabled() {
++    return simOutputEnabled;
++}
++
++export function createSimInstruments(names: string[]): Instrument[] {
++    return names.map((name, i) => ({
++        id: i,
++        name,
++        instrument: {
++            waveform: SIM_INSTRUMENT_BASE + i,
++            octave: 4,
++            ampEnvelope: {
++                attack: 10,
++                decay: 100,
++                sustain: 500,
++                release: 100,
++                amplitude: 1024
++            }
++        }
++    }));
++}
++
++/** index of the simulator instrument, or -1 if this isn't one */
++export function simInstrumentIndex(instrument: pxt.assets.music.Instrument | undefined): number {
++    if (!instrument) return -1;
++    const index = instrument.waveform - SIM_INSTRUMENT_BASE;
++    return index >= 0 && index < 50 ? index : -1;
++}
++
++/**
++ * Replace a song's instruments with the simulator instruments, mapping each
++ * track to the simulator instrument it was saved with (or the first one).
++ */
++export function applySimInstruments(song: Song, names: string[]): Song {
++    const instruments = createSimInstruments(names);
++
++    const alreadyApplied = song.instruments.length === instruments.length &&
++        song.instruments.every((inst, i) => inst.name === names[i] &&
++            isMelodicInstrument(inst) && simInstrumentIndex(inst.instrument) === i);
++    if (alreadyApplied) return song;
++
++    const tracks = song.tracks.map(track => {
++        const old = song.instruments.find(i => i.id === track.instrumentId);
++        let index = old && isMelodicInstrument(old) ? simInstrumentIndex(old.instrument) : -1;
++        if (index < 0 || index >= instruments.length) index = 0;
++        return { ...track, instrumentId: instruments[index].id };
++    });
++
++    return {
++        ...song,
++        instruments,
++        nextInstrumentId: instruments.length,
++        tracks
++    };
++}
++
++/**
++ * @param pianoRollNote the piano roll's 0-based note (0 = C1), not the 1-based pxt song note
++ */
++export function sendSimNote(instrumentIndex: number, pianoRollNote: number, velocity: number, durationMs: number) {
++    if (!simulator.driver) return;
++    simulator.proxy({
++        type: "custom",
++        content: {
++            type: SIM_NOTE_MESSAGE,
++            instrument: instrumentIndex,
++            note: pianoRollNote + 24,
++            velocity: Math.max(0, Math.min(127, Math.round(velocity))),
++            duration: Math.max(1, Math.round(durationMs))
++        }
++    } as pxsim.SimulatorCustomMessage);
++}
++
++// ---- song playback (Play / Loop buttons) ----
++
++let lastTick = -1;
++
++export function resetSimPlayback(startTick = 0) {
++    lastTick = startTick - 1;
++}
++
++/**
++ * Called on every sequencer tick while sim output is enabled. Sends every note
++ * that starts in (lastTick, tick], handling skipped ticks and loop wrap-around.
++ */
++export function onSimPlaybackTick(song: pxt.assets.music.Song, tick: number) {
++    if (!song) return;
++    const totalTicks = song.measures * song.beatsPerMeasure * song.ticksPerBeat;
++    const msPerTick = 60000 / song.beatsPerMinute / song.ticksPerBeat;
++
++    const sendRange = (from: number, to: number) => {
++        for (const track of song.tracks) {
++            const index = simInstrumentIndex(track.instrument);
++            if (track.drums || index < 0) continue;
++            for (const event of track.notes) {
++                if (event.startTick > from && event.startTick <= to) {
++                    const velocity = event.velocity === undefined ? 127 : Math.min(127, event.velocity);
++                    for (const note of event.notes) {
++                        // pxt song notes are 1-based
++                        sendSimNote(index, note.note - 1, velocity, (event.endTick - event.startTick) * msPerTick);
++                    }
++                }
++            }
++        }
++    };
++
++    if (tick < lastTick) {
++        // looped around
++        sendRange(lastTick, totalTicks);
++        sendRange(-1, tick);
++    }
++    else {
++        sendRange(lastTick, tick);
++    }
++    lastTick = tick;
++}
+diff --git a/webapp/src/components/pianoRoll/utils.ts b/webapp/src/components/pianoRoll/utils.ts
+index 0d8446d..d1d1d8a 100644
+--- a/webapp/src/components/pianoRoll/utils.ts
++++ b/webapp/src/components/pianoRoll/utils.ts
+@@ -12,6 +12,11 @@ export function getNoteName(note: number, includeOctave: boolean = true) {
+     return includeOctave ? `${noteNames[noteInOctave]}${octave}` : noteNames[noteInOctave];
+ }
+ 
++/** MIDI note number for a piano roll note (0 = C1 = MIDI 24, so middle C is 60) */
++export function getMidiNumber(note: number) {
++    return note + 24;
++}
++
+ export function range(start: number, end: number) {
+     return Array.from({ length: end - start }, (_, i) => start + i);
+ }
+diff --git a/webapp/src/simulator.ts b/webapp/src/simulator.ts
+index d0e96d1..6c1c045 100644
+--- a/webapp/src/simulator.ts
++++ b/webapp/src/simulator.ts
+@@ -1,6 +1,7 @@
+ /// <reference path="../../built/pxtsim.d.ts" />
+ /// <reference path="../../localtypings/pxtparts.d.ts" />
+ 
++import * as pxtblockly from "../../pxtblocks";
+ import * as core from "./core";
+ import * as coretsx from "./coretsx";
+ import * as data from "./data";
+@@ -43,6 +44,8 @@ export function setTranslations(translations: pxt.Map<string>) {
+ }
+ 
+ export async function initAsync(cfg: SimulatorConfig) {
++    // let block fields (e.g. synth preview buttons) post messages to the simulator
++    pxtblockly.setSimulatorMessageHandler(msg => driver?.postMessage(msg));
+     // We previously hit a Safari < 18 codegen issue with root as a parameter.
+     const root = document.getElementById("boardview");
+     if (!root) return;
