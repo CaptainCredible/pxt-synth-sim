@@ -1,3 +1,167 @@
+diff --git a/fieldeditors/extensions.ts b/fieldeditors/extensions.ts
+index c7e4aae1..4834e8e7 100644
+--- a/fieldeditors/extensions.ts
++++ b/fieldeditors/extensions.ts
+@@ -3,6 +3,7 @@
+ 
+ import { FieldGestures } from "./field_gestures";
+ import { FieldPinPicker } from "./field_pinPicker";
++import { FieldDependentSlider } from "./field_dependentslider";
+ 
+ pxt.editor.initFieldExtensionsAsync = function (opts: pxt.editor.FieldExtensionOptions): Promise<pxt.editor.FieldExtensionResult> {
+     pxt.debug('loading pxt-microbit field editors...')
+@@ -15,6 +16,10 @@ pxt.editor.initFieldExtensionsAsync = function (opts: pxt.editor.FieldExtensionO
+             {
+                 selector: "pinpicker",
+                 editor: FieldPinPicker
++            },
++            {
++                selector: "dependentslider",
++                editor: FieldDependentSlider
+             }
+         ]
+     };
+diff --git a/fieldeditors/field_dependentslider.ts b/fieldeditors/field_dependentslider.ts
+new file mode 100644
+index 00000000..cf65c317
+--- /dev/null
++++ b/fieldeditors/field_dependentslider.ts
+@@ -0,0 +1,135 @@
++/// <reference path="../node_modules/pxt-core/localtypings/pxtblockly.d.ts"/>
++
++const pxtblockly = pxt.blocks.requirePxtBlockly()
++const Blockly = pxt.blocks.requireBlockly();
++
++/**
++ * "dependentslider": a number slider whose range, default and units depend on a dropdown
++ * in the block this value is plugged into (e.g. "set [Sound 1] [cutoff v] to (80 %)").
++ *
++ * Use it on a shadow block's number parameter:
++ *   //% value.fieldEditor="dependentslider"
++ *   //% value.fieldOptions.source="param"      name of the parent block's dropdown field
++ *   //% value.fieldOptions.ranges="Cutoff:0:100:80:%;EnvAttackTime:0:2000:5:ms;Osc1Shape:0:2:0:saw|pulse|triangle"
++ * Each range is key:min:max:default:unit, where key is the dropdown value after the last "."
++ * (enum member name). A unit containing "|" lists names for 0, 1, 2... instead.
++ * When the dropdown changes, the value resets to that parameter's default.
++ */
++export interface FieldDependentSliderOptions {
++    source?: string;
++    ranges?: string;
++}
++
++interface DependentRange {
++    min: number;
++    max: number;
++    defl: number;
++    unit: string;
++    labels?: string[];
++}
++
++export class FieldDependentSlider extends pxtblockly.FieldSlider {
++    public isFieldCustom_ = true;
++
++    private sourceName: string;
++    private ranges: { [key: string]: DependentRange } = {};
++    private listenerWorkspace: any;
++
++    constructor(value: string, options: FieldDependentSliderOptions, validator?: any) {
++        super(String(value), "0", "100", null, "1", " ", validator);
++        this.sourceName = (options && options.source) || "param";
++        for (const entry of ((options && options.ranges) || "").split(";")) {
++            const parts = entry.split(":");
++            if (parts.length < 4) continue;
++            const unit = parts.slice(4).join(":");
++            this.ranges[parts[0].trim()] = {
++                min: parseFloat(parts[1]),
++                max: parseFloat(parts[2]),
++                defl: parseFloat(parts[3]),
++                unit,
++                labels: unit.indexOf("|") >= 0 ? unit.split("|") : undefined
++            };
++        }
++    }
++
++    override init() {
++        super.init();
++        const block = this.getSourceBlock();
++        if (block && block.workspace && !this.listenerWorkspace) {
++            this.listenerWorkspace = block.workspace;
++            this.listenerWorkspace.addChangeListener(this.onWorkspaceChange);
++        }
++    }
++
++    override dispose() {
++        if (this.listenerWorkspace) {
++            this.listenerWorkspace.removeChangeListener(this.onWorkspaceChange);
++            this.listenerWorkspace = undefined;
++        }
++        super.dispose();
++    }
++
++    private sourceField(): any {
++        const block = this.getSourceBlock();
++        const parent = block && block.getParent();
++        return parent ? parent.getField(this.sourceName) : undefined;
++    }
++
++    private currentRange(): DependentRange | undefined {
++        const field = this.sourceField();
++        if (!field) return undefined;
++        const value = String(field.getValue());
++        return this.ranges[value.substr(value.lastIndexOf(".") + 1)];
++    }
++
++    /** The parent's dropdown changed: jump to the new parameter's default and redraw the units. */
++    private onWorkspaceChange = (e: any) => {
++        if (e.type !== Blockly.Events.BLOCK_CHANGE || e.element !== "field" || e.name !== this.sourceName) return;
++        const block = this.getSourceBlock();
++        const parent = block && block.getParent();
++        if (!parent || e.blockId !== parent.id) return;
++        // undo/redo replays the value change itself; don't overwrite it
++        if (!Blockly.Events.getRecordUndo()) return;
++        const range = this.currentRange();
++        if (range) {
++            const oldGroup = Blockly.Events.getGroup();
++            Blockly.Events.setGroup(e.group || true);
++            this.setValue(range.defl);
++            Blockly.Events.setGroup(oldGroup);
++        }
++        this.forceRerender();
++    }
++
++    private applyRange() {
++        const range = this.currentRange();
++        if (!range) return;
++        const span = range.max - range.min;
++        const step = range.labels || span > 20 ? 1 : 0.1;
++        this.setOptions(range.min, range.max, String(step), range.labels ? 1 : null);
++        const field = this.sourceField();
++        this.setLabel(field ? field.getText() : " ");
++    }
++
++    private format(value: any): string {
++        const range = this.currentRange();
++        const n = Number(value);
++        if (!range || isNaN(n)) return String(value);
++        if (range.labels) return range.labels[Math.round(n)] !== undefined ? range.labels[Math.round(n)] : String(value);
++        return range.unit ? (range.unit === "%" ? `${n}%` : `${n} ${range.unit}`) : String(n);
++    }
++
++    protected override showEditor_(e?: Event, quietInput?: boolean): void {
++        this.applyRange();
++        super.showEditor_(e, quietInput);
++    }
++
++    /** On the block: the value with its unit (or the shape name). While typing: the plain number. */
++    protected override getText_(): string | null {
++        if (this.isBeingEdited_) return super.getText_();
++        return this.format(this.getValue());
++    }
++
++    protected override setReadout(value: string | number) {
++        if (this.readout_) this.readout_.innerText = this.format(value);
++    }
++}
 diff --git a/sim/state/orchestra.ts b/sim/state/orchestra.ts
 index 8f9c7791..eec8921d 100644
 --- a/sim/state/orchestra.ts

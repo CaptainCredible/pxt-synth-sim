@@ -356,7 +356,7 @@ namespace synthBlocks {
      * with the master clock (see "start sequences").
      */
     //% blockId=synth_sequence_play
-    //% block="play sequence $seq $mode"
+    //% block="start sequence $seq $mode"
     //% seq.shadow=variables_get seq.defl=myMelody
     //% group="Sequencer" weight=80
     export function playSequence(seq: Sequence, mode: SequencePlayMode): void {
@@ -389,7 +389,7 @@ namespace synthBlocks {
      * play at the clock's current step, so they all line up.
      */
     //% blockId=synth_sequences_start
-    //% block="start sequences"
+    //% block="start sequences sync clock"
     //% group="Sequencer" weight=70
     export function startSequences(): void {
         if (clockRunning) return;
@@ -422,7 +422,7 @@ namespace synthBlocks {
      * from the top on the next "start sequences".
      */
     //% blockId=synth_sequences_end
-    //% block="end sequences"
+    //% block="stop sequences sync clock"
     //% group="Sequencer" weight=60
     export function endSequences(): void {
         clockRunning = false;

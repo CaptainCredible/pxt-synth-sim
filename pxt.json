@@ -26,6 +26,7 @@
         "sequencer.ts",
         "soundpresets.ts",
         "soundsetup.ts",
+        "paramblocks.ts",
         "main.ts"
     ],
     "targetVersions": {

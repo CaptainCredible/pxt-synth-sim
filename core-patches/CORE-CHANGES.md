@@ -5,7 +5,8 @@ This lists every change made to **MakeCode core (`microsoft/pxt`)** and to the *
 not listed. Use it to discuss upstreaming with Microsoft (core) and the Micro:bit Educational Foundation
 (target / makecode.microbit.org).
 
-Status: everything is **local and uncommitted**. It all compiles. The piano roll field and the song thumbnail
+Status: core changes are committed on branch `synth-sim-blocks` of the fork `CaptainCredible/pxt`; target changes
+are local (backed up as `pxt-microbit-notam-sim.patch`). It all compiles. The piano roll field and the song thumbnail
 have been seen in the editor; the other changes have not been confirmed working in a browser yet. No automated tests have
 been added.
 
@@ -24,8 +25,9 @@ been added.
 | 9 | Piano roll: `showSequenceTools` option (clear, transpose, nudge with wrap) | pxt | new UI option | ~+150 / −1 | Good candidate, opt-in |
 | 10 | Piano roll: `singleTrack` option (one track per song) | pxt | new UI option | ~+50 / −6 | Good candidate, opt-in |
 | 11 | `presetvalues` field editor (enum presets that fill in a block's inputs) | pxt | new field editor | +142 | Good candidate, generic |
+| 12 | `dependentslider` field editor (slider range/units follow another dropdown) | target | new field editor | +140 | Target-only; generic, could move to core |
 
-Totals: pxt core 22 files, **+1257 / −33** lines (6 new files); target 1 file, **+85** lines.
+Totals: pxt core 22 files, **+1257 / −33** lines (6 new files); target 3 files, **+225** lines (1 new file).
 
 **Base versions**
 - pxt core: `microsoft/pxt` commit `a0ef8615bc001ec50cd8a4cf09e7552c2115c9ba` (v13.3.2, 2026-11-17).
@@ -33,8 +35,8 @@ Totals: pxt core 22 files, **+1257 / −33** lines (6 new files); target 1 file,
   fork's own simulator synth (`sim/state/orchestra.ts`, `microsynth.ts`, worklet) predates this work and is
   not listed here.
 
-**Patch:** `pxt-core-pianoroll-sim.patch` in this folder holds the full core diff. Apply it with
-`git apply` on the base commit above.
+**Patches:** `pxt-core-pianoroll-sim.patch` in this folder holds the full core diff, `pxt-microbit-notam-sim.patch`
+the target diff (`sim/` and `fieldeditors/`). Apply them with `git apply` on the base commits above.
 
 ---
 
@@ -314,6 +316,40 @@ value of the dropdown (one small constant) plus the values that are on the block
 (e.g. a variable) are skipped when filling in. An undo of a preset may also leave the dropdown on "custom" instead of
 the previous preset, depending on how Blockly groups undo events.
 
+## 12. `dependentslider` field editor (target)
+
+**Files:** `fieldeditors/field_dependentslider.ts` (new, 135 lines), `fieldeditors/extensions.ts` (+5)
+
+**Problem:** the extension wants one "set [sound] [parameter v] to (value)" block where clicking the value opens a
+slider with the right range and units for the chosen parameter (cutoff 0-100 %, attack 0-2000 ms, tune
+-12..12 semitones, shapes as names). Block annotations only give a parameter one fixed `min`/`max`.
+
+**Change:** a target field editor (so no core change), registered as `dependentslider` through the target's
+existing `initFieldExtensionsAsync`. It subclasses pxt's `FieldSlider` and is used on the number parameter of a
+hidden shadow block. It reads the dropdown named in `fieldOptions.source` on the block it is plugged into, and
+looks up that value in `fieldOptions.ranges` (`key:min:max:default:unit;...`, a unit with `|` lists names for
+0, 1, 2...). Before the slider opens it applies that range; on the block it shows the value with its unit
+("80%", "5 ms", "triangle"), while typing it shows the plain number. When the dropdown changes it resets the value
+to the new parameter's default in the same event group (one undo step); it does nothing during undo/redo.
+
+```ts
+//% block="set $preset $param to $value" value.shadow=synth_param_value
+export function setAnyParameter(preset: SynthPreset, param: SynthAnyParam, value: number): void
+
+//% blockId=synth_param_value block="$value" shadow=true blockHidden=true shim=TD_ID
+//% value.fieldEditor="dependentslider" value.fieldOptions.source="param" value.fieldOptions.decompileLiterals=true
+//% value.fieldOptions.ranges="Cutoff:0:100:80:%;EnvAttackTime:0:2000:5:ms;Osc1Shape:0:2:0:saw|pulse|triangle"
+export function _paramValue(value: number): number { return value; }
+```
+
+`shim=TD_ID` keeps the JavaScript view clean (`setAnyParameter(..., 80)`), and `decompileLiterals=true` lets
+JavaScript with a plain number turn back into blocks. Verified in the editor with
+`tools/browser-tests/param-test.js` (ranges, units, reset on change, JavaScript round trip).
+
+**Upstream notes:** nothing synth-specific; useful for any "set [property v] to (value)" block. Lives in the
+target, so makecode.notam.org needs the target change (Thom), not Microsoft. Limitation: the range only follows a
+dropdown on the parent block, and a variable plugged into the input gets no range help.
+
 ---
 
 ## Keeping this file current
@@ -323,11 +359,11 @@ and upstream notes. Refresh the numbers with:
 
 ```bash
 cd ~/code/pxt-workspace/pxt && git add -N <new files> && git diff --stat && git diff > ../pxt-core-pianoroll-sim.patch
-cd ~/code/pxt-workspace/pxt-microbit-notam && git diff --stat -- sim/
+cd ~/code/pxt-workspace/pxt-microbit-notam && git add -N <new files> && git diff --stat -- sim/ fieldeditors/ && git diff -- sim/ fieldeditors/ > ../pxt-microbit-notam-sim.patch
 ```
 
 Note: `pxt-microbit-notam` also shows many modified files that are build output (locales, shims). Only the
-`sim/` changes listed above are intentional.
+`sim/` and `fieldeditors/` changes listed above are intentional.
 
 | Date | Change |
 |---|---|
@@ -346,3 +382,4 @@ Note: `pxt-microbit-notam` also shows many modified files that are build output 
 | 2026-11-19 | 11: `presetvalues` field; 4 (target): FM preview scaling 0–1 |
 | 2026-11-19 | 11: switch back to "custom" when a preset value is edited |
 | 2026-11-19 | 5/6: fix duplicated expandable inputs on load (row-end naming) |
+| 2026-11-25 | 12: `dependentslider` target field editor |
