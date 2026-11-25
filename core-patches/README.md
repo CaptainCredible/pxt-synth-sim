@@ -16,6 +16,7 @@ Other files:
 
 - `CORE-CHANGES.md`: what each change does, why, and notes for proposing it upstream (Microsoft / Micro:bit
   Educational Foundation).
+- `vscode/tasks.json`: VS Code tasks (start/stop server, rebuilds). Copy to `~/code/pxt-workspace/.vscode/`.
 - `START-HERE.md`, `claude-readme.md`: how to run the editor locally and the gotchas. Paths in them refer to the
   local workspace `~/code/pxt-workspace`, which holds all three repos side by side.
 
