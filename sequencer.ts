@@ -47,6 +47,14 @@ enum ScaleRoot {
     B = 11
 }
 
+enum SequencePlayOnceMode {
+    //% block="until end"
+    UntilEnd = 0,
+    //% block="in background"
+    InBackground = 1
+}
+
+/** Modes of the old combined block (kept for existing projects). */
 enum SequencePlayMode {
     //% block="until done"
     UntilDone = 0,
@@ -81,6 +89,8 @@ namespace synthBlocks {
         public root: ScaleRoot;
         /** semitones added after snapping */
         public transpose: number;
+        /** bumped by "stop sequence"; a playback stops when this no longer matches the value it started with */
+        public _playId: number;
 
         constructor() {
             this.length = 16;
@@ -93,6 +103,7 @@ namespace synthBlocks {
             this.scale = SequenceScale.Chromatic;
             this.root = ScaleRoot.C;
             this.transpose = 0;
+            this._playId = 0;
         }
 
         /** recompute the playing notes from the drawn notes */
@@ -291,14 +302,18 @@ namespace synthBlocks {
         }
     }
 
+    /** play a sequence once from the top; "stop sequence" ends it early */
     function playOnce(seq: Sequence) {
+        let id = seq._playId;
+        let alive = () => seq._playId == id;
         let timer = new StepTimer();
         for (let step = 0; step < seq.length; step++) {
+            if (!alive()) return;
             seq._trigger(step, msPerStep());
-            if (step < seq.length - 1) timer.waitForNextStep(() => true);
+            if (step < seq.length - 1 && !timer.waitForNextStep(alive)) return;
         }
-        // let the last step last its full length, as "until done" promises
-        timer.waitForNextStep(() => true);
+        // let the last step last its full length, as "until end" promises
+        timer.waitForNextStep(alive);
     }
 
     /** start the step handlers for this tick, each in its own fiber so they can't hold up the clock */
@@ -350,34 +365,66 @@ namespace synthBlocks {
     }
 
     /**
-     * Play a sequence. Each track uses the sound picked for it in the piano roll.
-     * "until done" waits until it has finished, "in background" plays it once
-     * while your program carries on, and "in sync in background" loops it in time
-     * with the master clock (see "start sequences").
+     * Play a sequence once. Each track uses the sound picked for it in the piano roll.
+     * "until end" waits until it has finished; "in background" lets your program carry on.
+     * "stop sequence" stops it early.
+     */
+    //% blockId=synth_sequence_play_once
+    //% block="play sequence $seq $mode"
+    //% seq.shadow=variables_get seq.defl=myMelody
+    //% group="Sequencer" weight=85
+    export function playSequenceOnce(seq: Sequence, mode: SequencePlayOnceMode): void {
+        if (!seq) return;
+        if (mode == SequencePlayOnceMode.UntilEnd) playOnce(seq);
+        else control.inBackground(() => playOnce(seq));
+    }
+
+    /**
+     * Stop a sequence started with "play sequence" (until end or in background).
+     * Notes that are already sounding finish normally.
+     */
+    //% blockId=synth_sequence_stop_once
+    //% block="stop sequence $seq"
+    //% seq.shadow=variables_get seq.defl=myMelody
+    //% group="Sequencer" weight=84
+    export function stopSequenceOnce(seq: Sequence): void {
+        if (seq) seq._playId++;
+    }
+
+    /**
+     * Add a sequence to the sync clock: it loops in time with the clock and every other synced sequence.
+     * If the clock is running it joins at once, at the clock's current step; otherwise it starts with
+     * "start sequences sync clock".
+     */
+    //% blockId=synth_sequence_cue
+    //% block="cue synced sequence $seq"
+    //% seq.shadow=variables_get seq.defl=myMelody
+    //% group="Sequencer" weight=75
+    export function cueSequence(seq: Sequence): void {
+        if (seq && syncedSequences.indexOf(seq) < 0) syncedSequences.push(seq);
+    }
+
+    /**
+     * Old block, kept so existing projects still work. Use "play sequence" or "cue synced sequence".
      */
     //% blockId=synth_sequence_play
     //% block="start sequence $seq $mode"
     //% seq.shadow=variables_get seq.defl=myMelody
-    //% group="Sequencer" weight=80
+    //% group="Sequencer" weight=80 deprecated=1
     export function playSequence(seq: Sequence, mode: SequencePlayMode): void {
         if (!seq) return;
-        if (mode == SequencePlayMode.UntilDone) {
-            playOnce(seq);
-        } else if (mode == SequencePlayMode.InBackground) {
-            control.inBackground(() => playOnce(seq));
-        } else if (syncedSequences.indexOf(seq) < 0) {
-            // joins at once, at the step the master clock says it is at (tick % its length)
-            syncedSequences.push(seq);
-        }
+        if (mode == SequencePlayMode.UntilDone) playSequenceOnce(seq, SequencePlayOnceMode.UntilEnd);
+        else if (mode == SequencePlayMode.InBackground) playSequenceOnce(seq, SequencePlayOnceMode.InBackground);
+        else cueSequence(seq);
     }
 
     /**
-     * Stop a sequence that is playing in sync with the master clock.
+     * Take a sequence off the sync clock (see "cue synced sequence").
      */
     //% blockId=synth_sequence_stop
     //% block="stop synced sequence $seq"
     //% seq.shadow=variables_get seq.defl=myMelody
-    //% group="Sequencer" weight=50
+    //% group="Sequencer" weight=74
     export function stopSequence(seq: Sequence): void {
         let i = syncedSequences.indexOf(seq);
         if (i < 0) return;
@@ -385,8 +432,8 @@ namespace synthBlocks {
     }
 
     /**
-     * Start the master clock from step 1. Sequences played "in sync in background"
-     * play at the clock's current step, so they all line up.
+     * Start the sync clock from step 1. Cued sequences play at the clock's current step,
+     * so they all line up.
      */
     //% blockId=synth_sequences_start
     //% block="start sequences sync clock"
@@ -418,8 +465,8 @@ namespace synthBlocks {
     }
 
     /**
-     * Stop the master clock. Synced sequences stay registered and start again
-     * from the top on the next "start sequences".
+     * Stop the sync clock. Cued sequences stay cued and start again from the top
+     * on the next "start sequences sync clock".
      */
     //% blockId=synth_sequences_end
     //% block="stop sequences sync clock"
