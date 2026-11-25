@@ -44,9 +44,12 @@ Click the simulator once: browsers block audio until a user gesture.
   macOS "Optimize Mac Storage" offloaded ~21k files in `pxt/` (they show up with `find . -flags +dataless`).
   Reading one blocks until iCloud downloads it (~20 files/min), so builds, `git status`, and `grep -r` hang
   at 0% CPU with no output. That's why the workspace moved from ~/Documents/code to ~/code on 2026-11-18.
-- `pxt serve` does **not** rebuild the simulator when `sim/` changes. After editing `sim/*.ts` run
-  `node ../pxt/built/pxt.js buildsimjs` in the target (it rebuilds `built/sim.js`, then fails on an unrelated
-  share step - ignore that error), then reload the editor.
+- `pxt serve` **does** rebuild the simulator when files in `sim/` or its direct subfolders (e.g. `sim/state/`) are
+  saved (verified 2026-11-25: `built/sim.js` rewritten within seconds). Just reload the editor. Without a running
+  server use `node ../pxt/built/pxt.js buildtarget` in the target (~20 s). Do **not** use `buildsimjs`: it is a
+  share-link command that crashes immediately ("Building sim js for undefined") and never builds the simulator
+  (an earlier note here wrongly recommended it). `sim/state/worklet/` is deeper and not watched: `npm run build:worklet`.
+- VS Code tasks for all of this live in `.vscode/tasks.json` (workspace root); START-HERE.md lists them.
 - After editing pxt core webapp/pxtblocks: `npx gulp webapp` in `pxt/` (faster than a full build), then reload.
 - Quick TS type-check of the extension (the CLI `pxt build` hangs on the cloud C++ compile):
   `pxt/node_modules/.bin/tsc --noEmit --target es5 --noLib pxt/libs/pxt-common/pxt-core.d.ts pxt/libs/pxt-common/pxt-helpers.ts pxt-microbit-notam/libs/core/*.d.ts pxt-microbit-notam/libs/core/*.ts pxt-synth-sim/{enums.d.ts,shims.d.ts,synth.ts,helpers.ts,sequencer.ts}`

@@ -1,0 +1,82 @@
+{
+  // Run with Cmd+Shift+P → "Tasks: Run Task". See START-HERE.md for when to use which.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Server: Start (or restart)",
+      "detail": "Stops any running editor server, then starts it. Open the localhost:3232 link it prints.",
+      "type": "shell",
+      "command": "pkill -f 'pxt[.]js serve'; sleep 1; node ../pxt/built/pxt.js serve --no-browser --localRepo preglow/pxt-synth-sim=${workspaceFolder}/pxt-synth-sim",
+      "options": { "cwd": "${workspaceFolder}/pxt-microbit-notam" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": {
+        "pattern": { "regexp": "^__never__$" },
+        "background": { "activesBegin": true, "beginsPattern": "^__never__$", "endsPattern": "To launch the editor" }
+      }
+    },
+    {
+      "label": "Server: Stop",
+      "detail": "Stops the editor server",
+      "type": "shell",
+      "command": "pkill -f 'pxt[.]js serve' && echo 'Server stopped.' || echo 'Server was not running.'",
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build: Core (webapp)",
+      "detail": "After changing pxt/ (blocks, piano roll, editor). Then reload the editor page.",
+      "type": "shell",
+      "command": "npx gulp webapp",
+      "options": { "cwd": "${workspaceFolder}/pxt" },
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build: Core (full, for styles and pxtlib)",
+      "detail": "After changing pxt/theme/*.less or pxt/pxtlib. Slower. Then reload the editor page.",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "${workspaceFolder}/pxt" },
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build: Simulator",
+      "detail": "Only needed when the server is NOT running (it rebuilds sim/ by itself on save). ~20 s.",
+      "type": "shell",
+      // The 'TS1109/TS1005' errors in record-audio.ts and visuals/microbit.ts are upstream noise.
+      "command": "node ../pxt/built/pxt.js buildtarget && echo && echo '✅ Simulator built. Reload the editor page.'",
+      "options": { "cwd": "${workspaceFolder}/pxt-microbit-notam" },
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build: Simulator audio worklet",
+      "detail": "After changing pxt-microbit-notam/sim/state/worklet/. Then reload the editor page.",
+      "type": "shell",
+      "command": "npm run build:worklet",
+      "options": { "cwd": "${workspaceFolder}/pxt-microbit-notam" },
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build: Sound presets",
+      "detail": "After editing pxt-synth-sim/tools/presets.txt. Then reload the editor page.",
+      "type": "shell",
+      "command": "python3 tools/presets_to_ts.py",
+      "options": { "cwd": "${workspaceFolder}/pxt-synth-sim" },
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Check: Type-check extension",
+      "detail": "Quick TypeScript check of pxt-synth-sim (errors under libs/core and about 'hex' are noise)",
+      "type": "shell",
+      "command": "pxt/node_modules/.bin/tsc --noEmit --target es5 --noLib pxt/libs/pxt-common/pxt-core.d.ts pxt/libs/pxt-common/pxt-helpers.ts pxt-microbit-notam/libs/core/*.d.ts pxt-microbit-notam/libs/core/*.ts pxt-synth-sim/enums.d.ts pxt-synth-sim/shims.d.ts pxt-synth-sim/*.ts 2>&1 | grep -v -e '^pxt-microbit-notam/libs/core' -e \"'hex'\" | grep . || echo '✅ No errors in pxt-synth-sim.'",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "clear": true },
+      "problemMatcher": []
+    }
+  ]
+}
