@@ -6,7 +6,7 @@ not listed. Use it to discuss upstreaming with Microsoft (core) and the Micro:bi
 (target / makecode.microbit.org).
 
 Status: core changes are committed on branch `synth-sim-blocks` of the fork `CaptainCredible/pxt`; target changes
-are local (backed up as `pxt-microbit-notam-sim.patch`). It all compiles. The piano roll field and the song thumbnail
+are on branch `synth-sim-orchestra` of `CaptainCredible/pxt-microbit` (also as `pxt-microbit-notam-sim.patch`). It all compiles. The piano roll field and the song thumbnail
 have been seen in the editor; the other changes have not been confirmed working in a browser yet. No automated tests have
 been added.
 

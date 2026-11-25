@@ -9,7 +9,7 @@ simulator audio.
 | Folder | What it is | Origin |
 |---|---|---|
 | `pxt/` | MakeCode core editor engine (v13.3.2, commit a0ef861). Built (`npm run build`). **Locally patched**, see "Core patch" below. | https://github.com/microsoft/pxt (shallow clone) |
-| `pxt-microbit-notam/` | The micro:bit **target**, NOTAM fork with simulator synth audio. This is the one we serve. | https://git.notam.no/thomj/pxt-microbit (shared by Thom), `upstream` remote = microsoft/pxt-microbit |
+| `pxt-microbit-notam/` | The micro:bit **target**, NOTAM fork with simulator synth audio. This is the one we serve. | https://git.notam.no/thomj/pxt-microbit (shared by Thom). Our work: branch `synth-sim-orchestra`, remote `mine` = github.com/CaptainCredible/pxt-microbit. `upstream` = microsoft/pxt-microbit |
 | `pxt-synth-sim/` | The extension under development (`pxt.json`, `synth.ts`, `main.blocks`, `synth.cpp`, `MicroSynth.*`, `shims.d.ts`). | https://github.com/preglow/pxt-synth-sim |
 
 Note: there is no `microsoft/pxt-makecode` repo. The editor = `pxt` (core) + a target repo.

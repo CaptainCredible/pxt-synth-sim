@@ -35,4 +35,8 @@ git clone https://git.notam.no/thomj/pxt-microbit pxt-microbit-notam && (cd pxt-
 git clone -b sequencer-and-presets https://github.com/CaptainCredible/pxt-synth-sim
 ```
 
+The target and core branches are also on GitHub, so instead of applying the patches you can clone
+`-b synth-sim-orchestra https://github.com/CaptainCredible/pxt-microbit pxt-microbit-notam` and
+`-b synth-sim-blocks https://github.com/CaptainCredible/pxt`.
+
 (Clone pxt-synth-sim first, or adjust the patch paths.) Then build and link as described in `claude-readme.md`.
