@@ -24,6 +24,7 @@
         "samples/Cowbell_sample.h",
         "helpers.ts",
         "sequencer.ts",
+        "eventsequencer.ts",
         "soundpresets.ts",
         "soundsetup.ts",
         "paramblocks.ts",
