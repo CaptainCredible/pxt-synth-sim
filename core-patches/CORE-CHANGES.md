@@ -12,6 +12,14 @@ been added.
 
 ## Summary
 
+**Key to the Repo column.** MakeCode has three layers:
+
+| Term | Repo (folder in the workspace) | What it is |
+|---|---|---|
+| **core** (`pxt`) | `microsoft/pxt` (`pxt/`) | The MakeCode engine shared by every editor: blocks, piano roll, compiler, editor UI |
+| **target** | NOTAM fork of `microsoft/pxt-microbit` (`pxt-microbit-notam/`) | The micro:bit editor built on core: micro:bit blocks and the simulator, including the NOTAM synth audio |
+| extension | `pxt-synth-sim` (`pxt-synth-sim/`) | The SynthBlocks package added to a project. Not listed in this file |
+
 | # | Change | Repo | Kind | Lines (+/−) | Upstream outlook |
 |---|---|---|---|---|---|
 | 1 | Song thumbnail crashes on targets without a palette | pxt | bug fix | ~+45 / −10 | Good candidate as-is |
